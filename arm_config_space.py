@@ -198,7 +198,7 @@ class ArmAnimator(object):
             self.last_break = i
 
         self.h_path.set_data(self.path[self.last_break:(i+1), 0], self.path[self.last_break:(i+1), 1])
-        self.h_pathend.set_data(self.path[i, 0], self.path[i, 1])
+        self.h_pathend.set_data([self.path[i, 0]], [self.path[i, 1]])
 
         self.end_effector_path.append(self.arm.get_end_effector_position())
         self.h_ee_path.set_data(*self.end_effector_path.get_xy())

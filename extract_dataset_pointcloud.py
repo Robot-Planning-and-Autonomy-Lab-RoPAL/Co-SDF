@@ -85,9 +85,9 @@ def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.25, sigma=0.02
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(prog="C-space Dataset Generator", description="Generate a dataset to train a neural distance field from C-space sampling")
 	parser.add_argument('-w', '--world', default='config/block_world.yaml', help='World definition (obstacles)')
-	parser.add_argument("-n", "--n-train", type=int, default=10000, help="number of samples in the training set")
+	parser.add_argument("-n", "--n-train", type=int, default=1000, help="number of samples in the training set")
 	parser.add_argument("-visu", action="store_true", help="generate visualization of sampled configurations")
-	parser.add_argument("-r", "--near-ratio", type=float, default=0.25, help="ratio of samples drawn near the free/obs boundary")
+	parser.add_argument("-r", "--near-ratio", type=float, default=0.5, help="ratio of samples drawn near the free/obs boundary")
 	parser.add_argument("-s", "--sigma", type=float, default=0.02, help="noise scale for near-boundary sampling")
 	parser.add_argument("-rmin", "--min-dist", type=float, default=0.0, help="minimum distance from boundary to keep (optional)")
 	parser.add_argument("-bal", "--balance", action="store_true", help="balance dataset: equal free/obs samples")
