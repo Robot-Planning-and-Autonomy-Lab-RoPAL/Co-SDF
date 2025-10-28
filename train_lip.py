@@ -25,8 +25,11 @@ if __name__ == "__main__":
 		)
 	
 		# dataset parameters
-		parser.add_argument("dataset", type=str, help="name of the dataset to train on")
-		parser.add_argument("-o", "--output-name", type=str, default="", help="custom output folder name")
+		parser.add_argument("--dataset", type=str, default="block_world",
+							help="prefix of dataset files, e.g. 'block_world'")
+		parser.add_argument("--data-dir", type=str, default="inputs_cspace",
+							help="directory where the dataset npy/npz files are stored")	
+		parser.add_argument("-o", "--output-name", type=str, default="block_world_random_2000", help="custom output folder name")
 		parser.add_argument("--unsigned", action="store_true", help="flag for training an unsigned distance field instead of a signed one")
 	
 		# model parameters
@@ -46,8 +49,6 @@ if __name__ == "__main__":
 		parser.add_argument("-cp", "--checkpoint-freq", type=int, default=10, help="Number of epochs between each model save")
 		parser.add_argument("-cpu", action="store_true", help="force training on CPU")
 		
-		parser.add_argument("--data-dir", type=str, default="inputs",
-							help="directory where the dataset npy/npz files are stored")
 					
 		args = parser.parse_args()
 	
@@ -71,9 +72,9 @@ if __name__ == "__main__":
 		DIM : int = None
 	
 		#### Load train set ####
-		data_dir = args.data_dir  # <--- 新增：数据目录，可传 inputs_cspace
+		data_dir = args.data_dir
 	
-		if config.signed:  # SIGNED MODE（C-space 用这个：不要加 --unsigned）
+		if config.signed:
 				X_train_in = np.load(os.path.join(data_dir, f"{args.dataset}_Xtrain_in.npy"))
 				X_train_in = torch.tensor(X_train_in, dtype=torch.float32, device=config.device)
 				loader_in = DataLoader(TensorDataset(X_train_in), batch_size=config.batch_size, shuffle=True)
@@ -86,7 +87,7 @@ if __name__ == "__main__":
 							f"  Inside (collision): {X_train_in.shape}\n"
 							f"  Outside (free):     {X_train_out.shape}")
 	
-		else:  # UNSIGNED MODE（只有你真的有 *_Xtrain_on.npy 时才用）
+		else:
 				X_train_on = np.load(os.path.join(data_dir, f"{args.dataset}_Xtrain_on.npy"))
 				X_train_on = torch.tensor(X_train_on, dtype=torch.float32, device=config.device)
 				loader_on = DataLoader(TensorDataset(X_train_on), batch_size=config.batch_size, shuffle=True)

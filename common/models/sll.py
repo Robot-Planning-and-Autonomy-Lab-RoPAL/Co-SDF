@@ -45,7 +45,7 @@ class SDPBasedLipschitzDense(nn.Module):
     
 def DenseSDP(dim_in, dim_hidden, n_layers):
     layers = []
-    layers.append(nn.ZeroPad1d((0, dim_hidden-dim_in)))
+    layers.append(nn.Linear(dim_in, dim_hidden, bias=False))
     for _ in range(n_layers):
         layers.append(SDPBasedLipschitzDense(dim_hidden))
     layers.append(torchlip.FrobeniusLinear(dim_hidden,1))

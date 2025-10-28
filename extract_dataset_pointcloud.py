@@ -56,7 +56,7 @@ def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.25, sigma=0.02
 	X1 = sample_uniform(max(n1, 0))
 	
 #	X2: 边界附近采样
-	candidates = sample_uniform(max(10 * n_pts, 1))
+	candidates = sample_uniform(max(1 * n_pts, 1))
 	def _parallel_label(points, pool, desc):
 		it = pool.imap(_oracle_worker, points, chunksize=1024)
 		return np.fromiter(tqdm(it, total=len(points), desc=desc, ncols=80), dtype=int, count=len(points))
@@ -80,14 +80,17 @@ def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.25, sigma=0.02
 	X = np.vstack([X1, X2]) if len(X2) else X1
 	labels = _parallel_label(X, pool, "Label final X")
 	X_in, X_out = X[labels == -1], X[labels == 1]
+	print("X_in shape :", X_in.shape)
+	print("X_out shape:", X_out.shape)
+	
 	return X_in, X_out
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(prog="C-space Dataset Generator", description="Generate a dataset to train a neural distance field from C-space sampling")
 	parser.add_argument('-w', '--world', default='config/block_world.yaml', help='World definition (obstacles)')
-	parser.add_argument("-n", "--n-train", type=int, default=1000, help="number of samples in the training set")
+	parser.add_argument("-n", "--n-train", type=int, default=2000, help="number of samples in the training set")
 	parser.add_argument("-visu", action="store_true", help="generate visualization of sampled configurations")
-	parser.add_argument("-r", "--near-ratio", type=float, default=0.5, help="ratio of samples drawn near the free/obs boundary")
+	parser.add_argument("-r", "--near-ratio", type=float, default=0.25, help="ratio of samples drawn near the free/obs boundary")
 	parser.add_argument("-s", "--sigma", type=float, default=0.02, help="noise scale for near-boundary sampling")
 	parser.add_argument("-rmin", "--min-dist", type=float, default=0.0, help="minimum distance from boundary to keep (optional)")
 	parser.add_argument("-bal", "--balance", action="store_true", help="balance dataset: equal free/obs samples")
@@ -103,15 +106,7 @@ if __name__ == "__main__":
 		
 	arm_problem = robot_tools.PlanningProblem(args.world)
 	theta, c_space = arm_problem.construct_config_space(nx=101)
-	
-#	def oracle(q):
-#		arm_problem.robot.set_link_angles(q)
-#		fp = arm_problem.robot.get_current_polygon()
-#		for o in arm_problem.workspace.obstacles:
-#			if fp.intersect(o):
-#				return True
-#		return False
-	
+		
 #	角度范围（与 construct_config_space 一致）
 	bounds = [(theta[0][0], theta[0][-1]), (theta[1][0], theta[1][-1])]
 	
@@ -122,10 +117,10 @@ if __name__ == "__main__":
 		X_in, X_out = extract_train_point_cloud(
 			n_pts=args.n_train,
 			bounds=bounds,
-			oracle=None,          # 不再用闭包 oracle，改用并行 worker
+			oracle=None,
 			near_ratio=args.near_ratio,
 			sigma=args.sigma,
-			pool=pool             # 传入进程池
+			pool=pool
 		)
 		t1 = time.time()
 		

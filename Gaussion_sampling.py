@@ -43,8 +43,7 @@ def extract_train_point_cloud_gaussian_pairs(n_pts, bounds, pool, sigma_pair=0.0
         return np.fromiter(tqdm(it, total=len(points), desc=desc, ncols=80),
                            dtype=int, count=len(points))
 
-    # 生成成对候选，提高跨过边界的命中率
-    n_pairs = max(int(10.0 * n_pts), 1)
+    n_pairs = n_pts
     q1 = sample_uniform(n_pairs)
     q2 = np.clip(q1 + np.random.randn(n_pairs, dim) * (sigma_pair * span), lo, hi)
 
@@ -89,16 +88,19 @@ def extract_train_point_cloud_gaussian_pairs(n_pts, bounds, pool, sigma_pair=0.0
         if X_out.shape[0] > keep_out:
             X_out = X_out[np.random.permutation(X_out.shape[0])[:keep_out]]
 
+    print("X_in shape :", X_in.shape)
+    print("X_out shape:", X_out.shape)
+    
     return X_in, X_out
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="C-space Gaussian Sampling Dataset Generator", description="Generate a dataset to train a neural distance field from Gaussian sampling")
     parser.add_argument('-w', '--world', default='config/block_world.yaml', help='World definition (obstacles)')
-    parser.add_argument("-n", "--n-train", type=int, default=1000, help="number of samples in the training set")
+    parser.add_argument("-n", "--n-train", type=int, default=10000, help="number of samples in the training set")
     parser.add_argument("--outdir", type=str, default="inputs_gaussian", help="输出目录")
     parser.add_argument("-prefix", type=str, default=None, help="文件名前缀")
     parser.add_argument("-sigma", "--sigma-pair", type=float, default=0.05, help="noise scale for near-boundary sampling")
-    parser.add_argument("-visu", action="store_true", help="generate visualization of sampled configurations")
+    parser.add_argument("-visu", action="store_true", default=True, help="generate visualization of sampled configurations")
     args = parser.parse_args()
 
     outdir = args.outdir
@@ -144,7 +146,7 @@ if __name__ == "__main__":
         plt.xlabel(r"$\theta_1$")
         plt.ylabel(r"$\theta_2$")
         plt.title(f"C-space Gaussian Pair {args.n_train} Samples")
-        plt.legend()
+        plt.legend(loc='lower right', frameon=True, framealpha=0.9)
         out_path = os.path.join(outdir, f"{prefix}_gaussian_{args.n_train}_samples.png")
         plt.savefig(out_path, dpi=300, bbox_inches='tight')
         plt.close()
