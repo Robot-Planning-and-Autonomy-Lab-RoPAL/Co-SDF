@@ -51,11 +51,11 @@ def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.25, sigma=0.02
 		u = np.random.rand(m, dim)
 		return lo + u * (hi - lo)
 	
-#	X1: 全局采样
+#	X1: global uniform sampling
 	n1 = int(n_pts * (1.0 - near_ratio))
 	X1 = sample_uniform(max(n1, 0))
 	
-#	X2: 边界附近采样
+#	X2: boundary-near sampling
 	candidates = sample_uniform(max(1 * n_pts, 1))
 	def _parallel_label(points, pool, desc):
 		it = pool.imap(_oracle_worker, points, chunksize=1024)
@@ -88,8 +88,8 @@ def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.25, sigma=0.02
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(prog="C-space Dataset Generator", description="Generate a dataset to train a neural distance field from C-space sampling")
 	parser.add_argument('-w', '--world', default='config/block_world.yaml', help='World definition (obstacles)')
-	parser.add_argument("-n", "--n-train", type=int, default=2000, help="number of samples in the training set")
-	parser.add_argument("-visu", action="store_true", help="generate visualization of sampled configurations")
+	parser.add_argument("-n", "--n-train", type=int, default=10, help="number of samples in the training set")
+	parser.add_argument("-visu", action="store_true",  default=True, help="generate visualization of sampled configurations")
 	parser.add_argument("-r", "--near-ratio", type=float, default=0.25, help="ratio of samples drawn near the free/obs boundary")
 	parser.add_argument("-s", "--sigma", type=float, default=0.02, help="noise scale for near-boundary sampling")
 	parser.add_argument("-rmin", "--min-dist", type=float, default=0.0, help="minimum distance from boundary to keep (optional)")
@@ -110,7 +110,7 @@ if __name__ == "__main__":
 #	角度范围（与 construct_config_space 一致）
 	bounds = [(theta[0][0], theta[0][-1]), (theta[1][0], theta[1][-1])]
 	
-#	采样生成训练点
+#	uniform sampling with multiprocessing
 	n_workers = os.cpu_count() or 4
 	with Pool(processes=n_workers, initializer=_init_oracle, initargs=(args.world,)) as pool:
 		t0 = time.time()
@@ -132,19 +132,31 @@ if __name__ == "__main__":
 	np.save(os.path.join(outdir, f"{prefix}_theta0.npy"),     theta[0])  # θ1 轴坐标
 	np.save(os.path.join(outdir, f"{prefix}_theta1.npy"),     theta[1])  # θ2 轴坐标
 	
-#	画图，标出采样点
-	plt.figure(figsize=(6,5))
-	plt.imshow(c_space.T, origin="lower",
-				extent=[theta[0][0], theta[0][-1], theta[1][0], theta[1][-1]],
-				cmap="gray_r")
-	if len(X_in):  
-		plt.scatter(X_in[:,0],  X_in[:,1],  c='red',  s=5, label="Collision")
-	if len(X_out): 
-		plt.scatter(X_out[:,0], X_out[:,1], c='blue', s=5, label="Free")
-	
-	out_path = os.path.join(outdir, f"{prefix}_cspace_{args.n_train}_samples.png")
-	plt.xlabel(r"$\theta_1$"); plt.ylabel(r"$\theta_2$")
-	plt.title("Configuration Space with Sampled Points"); plt.legend()
-	plt.savefig(out_path, dpi=300, bbox_inches='tight')
-	plt.close()
-	print(f"Figure saved to {out_path}")
+	if args.visu:
+
+		plt.figure(figsize=(6,5))
+		plt.imshow(c_space.T, origin="lower",
+					extent=[theta[0][0], theta[0][-1], theta[1][0], theta[1][-1]],
+					cmap="gray_r")
+		if len(X_in):  
+			plt.scatter(X_in[:,0],  X_in[:,1],  c='red',  s=5, label="Collision")
+			for i, (x, y) in enumerate(X_in):
+				plt.text(x, y, f"({x:.2f},{y:.2f})", color='red', fontsize=6, ha='left', va='bottom')
+		if len(X_out): 
+			plt.scatter(X_out[:,0], X_out[:,1], c='blue', s=5, label="Free")
+			for i, (x, y) in enumerate(X_out):
+				plt.text(x, y, f"({x:.2f},{y:.2f})", color='blue', fontsize=6, ha='left', va='bottom')
+		
+		out_path = os.path.join(outdir, f"{prefix}_cspace_{args.n_train}_samples.png")
+		plt.xlabel(r"$\theta_1$")
+		plt.ylabel(r"$\theta_2$")
+		plt.title("Configuration Space with Sampled Points")
+		plt.legend(loc='lower right', frameon=True, framealpha=0.9)
+
+		pi = np.pi
+		plt.xticks([0, pi, 2*pi], [r"$0$", r"$\pi$", r"$2\pi$"])
+		plt.yticks([0, pi, 2*pi], [r"$0$", r"$\pi$", r"$2\pi$"])
+		
+		plt.savefig(out_path, dpi=300, bbox_inches='tight')
+		plt.close()
+		print(f"Figure saved to {out_path}")

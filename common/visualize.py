@@ -74,16 +74,22 @@ def render_sdf_2d(render_path, contour_path, gradient_path, model, domain : M.ge
     if render_path is not None:
         norm = colors.TwoSlopeNorm(vmin=vmin, vmax=vmax, vcenter=0)
         plt.clf()
-        pos = plt.imshow(img, cmap="seismic", norm=norm)
-        plt.axis('off')
+        pos = plt.imshow(img, cmap="seismic", norm=norm, origin='lower')
+
+        plt.xlabel(r"$\theta_1$")
+        plt.ylabel(r"$\theta_2$")
+
         plt.colorbar(pos)
         plt.savefig(render_path, bbox_inches='tight', pad_inches=0)
+        plt.close() 
 
     if contour_path is not None:
         plt.clf()
         norm = colors.TwoSlopeNorm(vmin=vmin, vmax=vmax, vcenter=0)
-        plt.imshow(img, cmap="bwr", norm=norm)
-        plt.axis("off")
+        plt.imshow(img, cmap="bwr", norm=norm, origin='lower')
+
+        plt.xlabel(r"$\theta_1$")
+        plt.ylabel(r"$\theta_2$")
         # cs = plt.contourf(X,-Y,img, levels=np.linspace(-0.1,0.1,11), cmap="seismic", extend="both")
         # cs.changed()
         plt.contour(img, levels=16, colors='k', linestyles="solid", linewidths=0.3)
@@ -97,9 +103,10 @@ def render_sdf_2d(render_path, contour_path, gradient_path, model, domain : M.ge
         print("GRAD NORM INTERVAL", (np.min(grad_img), np.max(grad_img)))
 
         plt.clf()
-        pos = plt.imshow(grad_img, vmin=0.5, vmax=1.5, cmap="bwr")
+        pos = plt.imshow(grad_img, vmin=0.5, vmax=1.5, cmap="bwr",origin='lower')
         plt.contour(img, levels=[0.], colors='k', linestyles="solid", linewidths=0.6)
-        plt.axis("off")
+        plt.xlabel("x")
+        plt.ylabel("y")
         plt.colorbar(pos)
         plt.savefig(gradient_path, bbox_inches='tight', pad_inches=0)
 
@@ -153,16 +160,18 @@ def render_sdf_quad(render_path, contour_path, gradient_path, model, P0, P1, P2,
     if render_path is not None:
         norm = colors.TwoSlopeNorm(vmin=vmin, vmax=vmax, vcenter=0)
         plt.clf()
-        pos = plt.imshow(img, cmap="seismic", norm=norm)
-        plt.axis('off')
+        pos = plt.imshow(img, cmap="seismic", norm=norm, origin='lower')
+        plt.xlabel("x")
+        plt.ylabel("y")
         plt.colorbar(pos)
         plt.savefig(render_path, bbox_inches='tight', pad_inches=0)
 
     if contour_path is not None:
         plt.clf()
         norm = colors.TwoSlopeNorm(vmin=vmin, vmax=vmax, vcenter=0)
-        plt.imshow(img, cmap="bwr", norm=norm)
-        plt.axis("off")
+        plt.imshow(img, cmap="bwr", norm=norm, origin='lower')
+        plt.xlabel("x")
+        plt.ylabel("y")
         # cs = plt.contourf(X,-Y,img, levels=np.linspace(-0.1,0.1,11), cmap="seismic", extend="both")
         # cs.changed()
         plt.contour(img, levels=kwargs.get("n_levels", 16), colors='k', linestyles="solid", linewidths=0.5)
@@ -176,9 +185,10 @@ def render_sdf_quad(render_path, contour_path, gradient_path, model, P0, P1, P2,
         print("GRAD NORM INTERVAL", (np.min(grad_img), np.max(grad_img)))
 
         plt.clf()
-        pos = plt.imshow(grad_img, vmin=0.5, vmax=1.5, cmap="bwr")
+        pos = plt.imshow(grad_img, vmin=0.5, vmax=1.5, cmap="bwr", origin='lower')
         plt.contour(img, levels=[0.], colors='k', linestyles="solid", linewidths=0.6)
-        plt.axis("off")
+        plt.xlabel("x")
+        plt.ylabel("y")
         plt.colorbar(pos)
         plt.savefig(gradient_path, bbox_inches='tight', pad_inches=0)
 
@@ -226,11 +236,13 @@ def reconstruct_surface_marching_cubes(model, domain, device, iso=0, res=100, ba
     for key,mesh in to_save.items():
         for v in mesh.id_vertices:
             pV = M.Vec(mesh.vertices[v])
-            ix, iy, iz = int(pV.x), int(pV.y), int(pV.z)
-            dx, dy, dz = pV.x%1, pV.y%1, pV.z%1
-            vx = (1-dx)*L[0][ix] + dx * L[0][ix+1]
-            vy = (1-dy)*L[1][iy] + dy * L[1][iy+1]
-            vz = (1-dz)*L[2][iz] + dz * L[2][iz+1]
-            mesh.vertices[v] = M.Vec(vx,vy,vz)
+            # 将 verts 映射到实际坐标
+            verts = np.array(verts)  # shape (N,3)
+            for i in range(3):
+                verts[:, i] = np.interp(verts[:, i], np.arange(res), L[i])
+                
+            # 更新 Mouette 网格
+            m.vertices = [M.Vec(*v) for v in verts]
+
         to_save[key] = mesh
     return to_save
