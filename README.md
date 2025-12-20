@@ -1,4 +1,4 @@
-# 1-Lipschitz-Neural-Distance-Fields-for-Configuration-Space-Shape-Modeling
+# Neural-Distance-Fields-for-Configuration-Space-Shape-Modeling
 
 ##  Extracting Point Cloud Datasets
 

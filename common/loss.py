@@ -1,20 +1,36 @@
+
 import torch
 import torch.nn.functional as F
 
 class LossHKR:
-    """ Hinge Kantorovitch-Rubinstein loss"""
-
-    def __init__(self, margin, lbda):
-        self.margin = margin  # must be small but not too small.
-        # self.lbda   = lbda  # must be high.
-
-    def __call__(self, y):
+    """
+    Hinge Kantorovich–Rubinstein loss
+    RSS20-compatible version:
+    - free samples:   f(x)
+    - obstacle samples: -f(x)
+    """
+    
+    def __init__(self, margin=0.1, lbda=10.0):
+        self.margin = margin
+        self.lbda = lbda
+        
+    def __call__(self, signed_fx):
         """
         Args:
-            y: vector of predictions.
+            signed_fx: signed predictions
+                       +f(x) for C_free
+                       -f(x) for C_obs
         """
-        # return  F.relu(self.margin - y) + (1./self.lbda) * torch.mean(-y)
-        return  F.relu(self.margin - y)
+        
+        # KR term: E[- signed f(x)]
+        kr_loss = torch.mean(-signed_fx)
+        
+        # Hinge term: max(0, m - signed f(x))
+        hinge_loss = torch.mean(F.relu(self.margin - signed_fx))
+        
+        return kr_loss + self.lbda * hinge_loss
+    
+    
     
 def vector_alignment_loss(y, target):
     return (1-F.cosine_similarity(y, target, dim = 1)*2).mean()

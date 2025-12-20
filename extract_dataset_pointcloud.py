@@ -24,79 +24,169 @@ def _oracle_worker(q):
 			return -1
 	return 1
 
-def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.25, sigma=0.02, pool=None):
+def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.5, sigma=0.05, pool=None):
 	"""
-	在 C-space 中采样训练点并打标签 (free/obs)，并包含两类样本：
-	1) 全局均匀采样点 (X1)，覆盖整个关节范围
-	2) 边界附近采样点 (X2)，在 free/obs 边界周围额外采样，增加训练难点样本
+	使用高斯采样策略生成 C-space 训练点：
+	1. 随机采样点 q1
+	2. 在 q1 附近采样 q2 (q2 = q1 + sigma)
+	3. 如果 q1, q2 碰撞状态不同（一个free一个obs），则保留为边界样本
+	4. 混合一定比例的全局均匀样本，保证空间覆盖
 
 	Args:
-		n_pts (int): 总采样点数
-		bounds (list of (low, high)): 每个关节的上下界
-		oracle (callable): 碰撞检测函数，输入 q(ndarray)，返回 True=碰撞, False=free
-		near_ratio (float): 贴近边界的采样比例 (0~1)，决定 X2 的占比
-		sigma (float): 在边界点附近加噪声的标准差，控制扰动幅度
-		r_min (float, optional): 最小距离阈值，可选，过滤掉离边界过近的点
-		balance (bool): 是否强制 free/obs 各取一半
-
-	Returns:
-		X_in  (ndarray): 碰撞点（inside/obs, oracle=True）
-		X_out (ndarray): 可行点（outside/free, oracle=False）
+		n_pts (int): 目标总样本数
+		bounds (list): [(min, max), ...]
+		oracle: (unused, uses global _GLOBAL_PROBLEM)
+		near_ratio (float): 边界样本占比 (0.0~1.0). 建议 0.5~0.8
+		sigma (float): 高斯扰动标准差 (相对于轴长)
+		pool: multiprocessing pool
 	"""
 	dim = len(bounds)
-	lo = np.array([b[0] for b in bounds], dtype=float)
-	hi = np.array([b[1] for b in bounds], dtype=float)
-	
+	lo = np.array([b[0] for b in bounds], float)
+	hi = np.array([b[1] for b in bounds], float)
+	span = hi - lo
+
+	# Helper: Uniform sampling
 	def sample_uniform(m):
-		u = np.random.rand(m, dim)
-		return lo + u * (hi - lo)
-	
-#	X1: global uniform sampling
-	n1 = int(n_pts * (1.0 - near_ratio))
-	X1 = sample_uniform(max(n1, 0))
-	
-#	X2: boundary-near sampling
-	candidates = sample_uniform(max(1 * n_pts, 1))
-	def _parallel_label(points, pool, desc):
+		if m <= 0: return np.zeros((0, dim))
+		return lo + np.random.rand(m, dim) * span
+
+	# Helper: Parallel labeling
+	def parallel_label(points, desc):
+		if len(points) == 0: return np.array([], dtype=int)
+		# chunksize affects performance, 1024 is reasonable
 		it = pool.imap(_oracle_worker, points, chunksize=1024)
-		return np.fromiter(tqdm(it, total=len(points), desc=desc, ncols=80), dtype=int, count=len(points))
-	
-	cand_labels = _parallel_label(candidates, pool, "Labeling candidates")
+		return np.fromiter(tqdm(it, total=len(points), desc=desc, ncols=80, leave=False), dtype=int, count=len(points))
 
-
+	X_in_all = []
+	X_out_all = []
 	
-#	粗略找交界：相邻标签不同
-	idx_near = np.where(cand_labels[:-1] != cand_labels[1:])[0]
-	k = int(n_pts * near_ratio)
+	# Target counts
+	n_boundary = int(n_pts * near_ratio)
+	n_uniform  = n_pts - n_boundary
 	
-	if len(idx_near) > 0:
-		base = candidates[idx_near[:k]]
-	else:
-		base = sample_uniform(k)
+	# --- 1. Boundary Sampling (Gaussian Pairs) ---
+	if n_boundary > 0:
+		print(f"Sampling {n_boundary} boundary points (Gaussian pairs)...")
+		# We need to find enough pairs. Success rate varies (e.g. 10-20% near surfaces).
+		# We'll sample in batches until we have enough.
+		batch_size = n_pts * 2 # Heuristic
 		
-	noise = sigma * (hi - lo) * np.random.randn(len(base), dim)
-	X2 = np.clip(base + noise, lo, hi)
+		pbar = tqdm(total=n_boundary, desc="Found Boundary Pts", ncols=80)
+		
+		while (len(X_in_all) + len(X_out_all)) < n_boundary:
+			# Generate pairs
+			q1 = sample_uniform(batch_size)
+			noise = np.random.randn(batch_size, dim) * (sigma * span)
+			q2 = np.clip(q1 + noise, lo, hi)
+			
+			# Label
+			l1 = parallel_label(q1, "Label Batch Q1")
+			l2 = parallel_label(q2, "Label Batch Q2")
+			
+			# Find crossing pairs: (Free, Obs) or (Obs, Free)
+			# l=1 (free), l=-1 (obs)
+			mask = (l1 != l2)
+			
+			# Extract
+			# Case 1: q1 obs (-1), q2 free (1)
+			mask1 = mask & (l1 == -1)
+			if np.any(mask1):
+				X_in_all.extend(q1[mask1])
+				X_out_all.extend(q2[mask1])
+				
+			# Case 2: q1 free (1), q2 obs (-1)
+			mask2 = mask & (l1 == 1)
+			if np.any(mask2):
+				X_out_all.extend(q1[mask2])
+				X_in_all.extend(q2[mask2])
+				
+			current_count = len(X_in_all) + len(X_out_all)
+			pbar.n = min(current_count, n_boundary)
+			pbar.refresh()
+			
+			# Reduce batch size for next iter to avoid massive over-sampling? 
+			# But collision check is expensive, better to oversample slightly and cut.
+			if current_count >= n_boundary:
+				break
+				
+		pbar.close()
 	
-	X = np.vstack([X1, X2]) if len(X2) else X1
-	labels = _parallel_label(X, pool, "Label final X")
-	X_in, X_out = X[labels == -1], X[labels == 1]
-	print("X_in shape :", X_in.shape)
-	print("X_out shape:", X_out.shape)
+	# Convert to arrays
+	X_in_bound = np.array(X_in_all)
+	X_out_bound = np.array(X_out_all)
+
+	# Trim to exact needed boundary count (balanced removal to keep pairs? 
+	# Actually pairs are good, but we just need individual points for the dataset finally)
+	# Whatever, just pool them.
 	
+	# --- 2. Uniform Sampling (Global Coverage) ---
+	# We might need to generate more to fill up to n_pts
+	cur_total = len(X_in_bound) + len(X_out_bound)
+	n_uniform_needed = max(n_pts - cur_total, 0)
+	
+	if n_uniform_needed > 0:
+		print(f"Sampling {n_uniform_needed} uniform points...")
+		# Sample uniform
+		# Note: purely uniform sampling might be imbalanced (mostly free or mostly obs).
+		# We just accept the distribution of the C-space.
+		U = sample_uniform(n_uniform_needed)
+		lU = parallel_label(U, "Label Uniform")
+		
+		U_in = U[lU == -1]
+		U_out = U[lU == 1]
+		
+		# Combine
+		if len(X_in_bound) > 0: X_in = np.vstack([X_in_bound, U_in]) if len(U_in) else X_in_bound
+		else: X_in = U_in
+		
+		if len(X_out_bound) > 0: X_out = np.vstack([X_out_bound, U_out]) if len(U_out) else X_out_bound
+		else: X_out = U_out
+	else:
+		X_in = X_in_bound
+		X_out = X_out_bound
+
+	# --- 3. Final Shuffle & Trim ---
+	# Ensure we don't have TOO many if we oversampled
+	# (Though our logic tries to be exact, pairs come in 2s)
+	
+	# Current sets
+	if len(X_in) == 0: X_in = np.zeros((0, dim))
+	if len(X_out) == 0: X_out = np.zeros((0, dim))
+	
+	# To respect n_pts exactly, we might need to trim.
+	# Let's just return everything we found, it's roughly n_pts.
+	# Or strict trim:
+	total_have = len(X_in) + len(X_out)
+	if total_have > n_pts:
+		# Randomly remove
+		keep_idx = np.random.permutation(total_have)[:n_pts]
+		# It's hard to index separated arrays. 
+		# Let's stack, shuffle, split? No, we need to return separated.
+		# Simple ratio trim.
+		frac = n_pts / total_have
+		n_in_keep = int(len(X_in) * frac)
+		n_out_keep = n_pts - n_in_keep
+		
+		if len(X_in) > 0: X_in = X_in[np.random.permutation(len(X_in))[:n_in_keep]]
+		if len(X_out) > 0: X_out = X_out[np.random.permutation(len(X_out))[:n_out_keep]]
+	
+	print(f"Final Dataset: {len(X_in)} Inj, {len(X_out)} Free. Total: {len(X_in)+len(X_out)}")
 	return X_in, X_out
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(prog="C-space Dataset Generator", description="Generate a dataset to train a neural distance field from C-space sampling")
 	parser.add_argument('-w', '--world', default='config/block_world.yaml', help='World definition (obstacles)')
-	parser.add_argument("-n", "--n-train", type=int, default=10, help="number of samples in the training set")
+	parser.add_argument("-n", "--n-train", type=int, default=2000, help="number of samples in the training set")
+	parser.add_argument("-nt", "--n-test",  type=int, default=1000, help="number of samples in the test set")
+	parser.add_argument("-nti", "--n-test-boundary", type=int, default=500, help="number of points in the set dataset that are sampled _on_ the surface.")
 	parser.add_argument("-visu", action="store_true",  default=True, help="generate visualization of sampled configurations")
-	parser.add_argument("-r", "--near-ratio", type=float, default=0.25, help="ratio of samples drawn near the free/obs boundary")
-	parser.add_argument("-s", "--sigma", type=float, default=0.02, help="noise scale for near-boundary sampling")
+	parser.add_argument("-r", "--near-ratio", type=float, default=0.7, help="ratio of samples drawn near the free/obs boundary")
+	parser.add_argument("-s", "--sigma", type=float, default=0.05, help="noise scale for near-boundary sampling")
 	parser.add_argument("-rmin", "--min-dist", type=float, default=0.0, help="minimum distance from boundary to keep (optional)")
 	parser.add_argument("-bal", "--balance", action="store_true", help="balance dataset: equal free/obs samples")
 	args = parser.parse_args()
 	
-	outdir = getattr(args, "outdir", "inputs_cspace")
+	outdir = getattr(args, "outdir", "inputs")
 	os.makedirs(outdir, exist_ok=True)
 	
 	if hasattr(args, "prefix") and args.prefix is not None:
@@ -132,6 +222,24 @@ if __name__ == "__main__":
 	np.save(os.path.join(outdir, f"{prefix}_theta0.npy"),     theta[0])  # θ1 轴坐标
 	np.save(os.path.join(outdir, f"{prefix}_theta1.npy"),     theta[1])  # θ2 轴坐标
 	
+	# === Generate test set ===
+	print("\nGenerate test set")
+	with Pool(processes=n_workers, initializer=_init_oracle, initargs=(args.world,)) as pool:
+		Xtest_in, Xtest_out = extract_train_point_cloud(
+			n_pts=args.n_test,
+			bounds=bounds,
+			oracle=None,
+			near_ratio=args.near_ratio,
+			sigma=args.sigma,
+			pool=pool
+		)
+	Xtest = np.vstack([Xtest_in, Xtest_out])
+	Ytest = np.concatenate([-np.ones(len(Xtest_in)), np.ones(len(Xtest_out))])
+	
+	np.save(os.path.join(outdir, f"{prefix}_Xtest.npy"), Xtest)
+	np.save(os.path.join(outdir, f"{prefix}_Ytest.npy"), Ytest)
+	print(f"Saved test set with {len(Xtest)} samples ({len(Xtest_in)} collision, {len(Xtest_out)} free)")
+		
 	if args.visu:
 
 		plt.figure(figsize=(6,5))
@@ -140,12 +248,8 @@ if __name__ == "__main__":
 					cmap="gray_r")
 		if len(X_in):  
 			plt.scatter(X_in[:,0],  X_in[:,1],  c='red',  s=5, label="Collision")
-			for i, (x, y) in enumerate(X_in):
-				plt.text(x, y, f"({x:.2f},{y:.2f})", color='red', fontsize=6, ha='left', va='bottom')
 		if len(X_out): 
 			plt.scatter(X_out[:,0], X_out[:,1], c='blue', s=5, label="Free")
-			for i, (x, y) in enumerate(X_out):
-				plt.text(x, y, f"({x:.2f},{y:.2f})", color='blue', fontsize=6, ha='left', va='bottom')
 		
 		out_path = os.path.join(outdir, f"{prefix}_cspace_{args.n_train}_samples.png")
 		plt.xlabel(r"$\theta_1$")
@@ -154,9 +258,9 @@ if __name__ == "__main__":
 		plt.legend(loc='lower right', frameon=True, framealpha=0.9)
 
 		pi = np.pi
-		plt.xticks([0, pi, 2*pi], [r"$0$", r"$\pi$", r"$2\pi$"])
-		plt.yticks([0, pi, 2*pi], [r"$0$", r"$\pi$", r"$2\pi$"])
-		
+		plt.xticks([0, pi/2, pi, 3*pi/2, 2*pi], [r'-$\pi$', r'$-\pi/2$', r'$0$', r'-$\pi/2$', r'$\pi$'])
+		plt.yticks([0, pi/2, pi, 3*pi/2, 2*pi], [r'-$\pi$', r'$-\pi/2$', r'$0$', r'-$\pi/2$', r'$\pi$'])
+
 		plt.savefig(out_path, dpi=300, bbox_inches='tight')
 		plt.close()
 		print(f"Figure saved to {out_path}")

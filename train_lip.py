@@ -6,6 +6,7 @@ import argparse
 import numpy as np
 
 import torch
+import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 
 import mouette as M
@@ -27,9 +28,9 @@ if __name__ == "__main__":
 		# dataset parameters
 		parser.add_argument("--dataset", type=str, default="block_world",
 							help="prefix of dataset files, e.g. 'block_world'")
-		parser.add_argument("--data-dir", type=str, default="inputs_cspace",
+		parser.add_argument("--data", type=str, default="inputs",
 							help="directory where the dataset npy/npz files are stored")	
-		parser.add_argument("-o", "--output-name", type=str, default="block_world_random_2000", help="custom output folder name")
+		parser.add_argument("-o", "--output-name", type=str, default="block_world_2000_periodic", help="custom output folder name")
 		parser.add_argument("--unsigned", action="store_true", help="flag for training an unsigned distance field instead of a signed one")
 	
 		# model parameters
@@ -38,7 +39,7 @@ if __name__ == "__main__":
 		parser.add_argument("-n-hidden", "--n-hidden", type=int, default=128, help="size of the layers")
 	
 		# optimization parameters
-		parser.add_argument("-ne", "--epochs", type=int, default=200, help="Number of training epochs")
+		parser.add_argument("-ne", "--epochs", type=int, default=20, help="Number of training epochs")
 		parser.add_argument('-bs',"--batch-size", type=int, default=200, help="Train batch size")
 		parser.add_argument("-tbs", "--test-batch-size", type = int, default = 5000, help="Test batch size")
 		parser.add_argument("-lr", "--learning-rate", type=float, default=5e-4, help="Adam's learning rate")
@@ -55,7 +56,7 @@ if __name__ == "__main__":
 		#### Config ####
 		config = SimpleNamespace(
 				signed = not args.unsigned,
-				device = get_device(args.cpu),
+				device = get_device(),
 				n_epochs = args.epochs,
 				checkpoint_freq = args.checkpoint_freq,
 				batch_size = args.batch_size,
@@ -72,51 +73,65 @@ if __name__ == "__main__":
 		DIM : int = None
 	
 		#### Load train set ####
-		data_dir = args.data_dir
-	
-		if config.signed:
-				X_train_in = np.load(os.path.join(data_dir, f"{args.dataset}_Xtrain_in.npy"))
-				X_train_in = torch.tensor(X_train_in, dtype=torch.float32, device=config.device)
+		if config.signed: # SIGNED MODE
+				X_train_in = np.load(os.path.join(f"{args.data}", f"{args.dataset}_Xtrain_in.npy"))
+				X_train_in = torch.Tensor(X_train_in).to(config.device)
 				loader_in = DataLoader(TensorDataset(X_train_in), batch_size=config.batch_size, shuffle=True)
 	
-				X_train_out = np.load(os.path.join(data_dir, f"{args.dataset}_Xtrain_out.npy"))
-				X_train_out = torch.tensor(X_train_out, dtype=torch.float32, device=config.device)
+				X_train_out = np.load(os.path.join(f"{args.data}", f"{args.dataset}_Xtrain_out.npy"))
+				X_train_out = torch.Tensor(X_train_out).to(config.device)
 				loader_out = DataLoader(TensorDataset(X_train_out), batch_size=config.batch_size, shuffle=True)
 	
-				print("Succesfully loaded train set:\n"
-							f"  Inside (collision): {X_train_in.shape}\n"
-							f"  Outside (free):     {X_train_out.shape}")
+				print(f"Succesfully loaded train set:\n", 
+							f"Inside: {X_train_in.shape}\n", 
+							f"Outside: {X_train_out.shape}")
 	
-		else:
-				X_train_on = np.load(os.path.join(data_dir, f"{args.dataset}_Xtrain_on.npy"))
-				X_train_on = torch.tensor(X_train_on, dtype=torch.float32, device=config.device)
+		else: # UNSIGNED MODE
+				X_train_on = np.load(os.path.join("inputs", f"{args.dataset}_Xtrain_on.npy"))
+				X_train_on = torch.Tensor(X_train_on).to(config.device)
 				loader_on = DataLoader(TensorDataset(X_train_on), batch_size=config.batch_size, shuffle=True)
-	
-				X_train_out = np.load(os.path.join(data_dir, f"{args.dataset}_Xtrain_out.npy"))
-				X_train_out = torch.tensor(X_train_out, dtype=torch.float32, device=config.device)
+				X_train_out = np.load(os.path.join("inputs", f"{args.dataset}_Xtrain_out.npy"))
+				X_train_out = torch.Tensor(X_train_out).to(config.device)
 				loader_out = DataLoader(TensorDataset(X_train_out), batch_size=config.batch_size, shuffle=True)
 	
-				print("Succesfully loaded train set:\n"
-							f"  Outside (free):  {X_train_out.shape}\n"
-							f"  Surface (on):    {X_train_on.shape}")
+				print(f"Succesfully loaded train set:\n", 
+							f"Outside: {X_train_out.shape}\n",
+							f"Surface: {X_train_on.shape}")
+	
 	
 		#### Load test set ####
-		X_test, Y_test = None, None
+		X_test,Y_test = None,None
 		test_loader = None
-		X_test_path = os.path.join(data_dir, f"{args.dataset}_Xtest.npy")
-		Y_test_path = os.path.join(data_dir, f"{args.dataset}_Ytest.npy")
+		X_test_path = os.path.join("inputs", f"{args.dataset}_Xtest.npy")
+		Y_test_path = os.path.join("inputs",f"{args.dataset}_Ytest.npy")
 		if os.path.exists(X_test_path) and os.path.exists(Y_test_path):
-				X_test = np.load(X_test_path)
-				Y_test = np.load(Y_test_path).reshape((X_test.shape[0], 1))
-				X_test = torch.tensor(X_test, dtype=torch.float32, device=config.device)
-				Y_test = torch.tensor(Y_test, dtype=torch.float32, device=config.device)
+				X_test = np.load(os.path.join("inputs", f"{args.dataset}_Xtest.npy"))
+				Y_test = np.load(os.path.join("inputs", f"{args.dataset}_Ytest.npy")).reshape((X_test.shape[0], 1))
+				X_test = torch.Tensor(X_test).to(config.device)
+				Y_test = torch.Tensor(Y_test).to(config.device)
 				test_loader = DataLoader(TensorDataset(X_test, Y_test), batch_size=config.test_batch_size)
 				print(f"Succesfully loaded test set: {X_test.shape}\n")
-				
+			
 		DIM = X_train_out.shape[1] # dimension of the dataset (2 or 3)
 	
 		#### Create model ####
-		model = select_model(args.model, DIM, args.n_layers, args.n_hidden).to(config.device)
+	
+		# Periodic Embedding to handle Torus topology
+		class PeriodicEmbedding(nn.Module):
+			def __init__(self):
+				super().__init__()
+			def forward(self, x):
+				# x: (N, 2) -> (N, 4) [cos, sin, cos, sin]
+				return torch.cat([torch.cos(x), torch.sin(x)], dim=-1)
+
+		# Original dimension is 2, but embedded is 4
+		embedding = PeriodicEmbedding()
+		model_core = select_model(args.model, DIM * 2, args.n_layers, args.n_hidden)
+		
+		model = nn.Sequential(embedding, model_core).to(config.device)
+		model.id = model_core.id
+		model.meta = model_core.meta
+		
 		print("PARAMETERS:", count_parameters(model))
 	
 		#### Export point cloud for visualization ####
@@ -137,7 +152,17 @@ if __name__ == "__main__":
 		callbacks.append(LoggerCB(os.path.join(config.output_folder, "log.csv")))
 		if config.checkpoint_freq>0:
 				callbacks.append(CheckpointCB([x for x in range(0, config.n_epochs, config.checkpoint_freq) if x>0]))
-				plot_domain = get_BB(X_train_on if args.unsigned else X_train_in, DIM, pad=0.5)  
+				plot_domain = get_BB(X_train_on if args.unsigned else X_train_in, DIM, pad=0.5)
+			
+				plot_domain = M.geometry.AABB(
+					[0.0, 0.0],
+					[2*np.pi, 2*np.pi]
+				)		
+				# 强制从0开始，保持原来的 span
+				if DIM == 2:
+						plot_domain = M.geometry.AABB([0.0, 0.0], [plot_domain.maxi[0], plot_domain.maxi[1]])
+				else:
+						plot_domain = M.geometry.AABB([0.0, 0.0, 0.0], [plot_domain.maxi[0], plot_domain.maxi[1], plot_domain.maxi[2]])
 				if DIM==2:
 						callbacks.append(Render2DCB(config.output_folder, config.checkpoint_freq, plot_domain, res=500))
 				else:

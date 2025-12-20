@@ -7,14 +7,7 @@ from scipy.interpolate import RegularGridInterpolator
 # =========================================================
 # C-space (θ1, θ2) → C-obs 的 Signed Distance Field (SDF)
 # =========================================================
-# - 每个关节角度在配置空间里是一个周期变量，定义在 [0, 2π) 上。
-# - 配置空间是环面 T² = S¹ × S¹，两个角度 θ1, θ2 都是模 2π 周期。
-# - 我们要计算：某个配置 q = (θ1, θ2) 到最近 C-obs 边界的角度距离
-#     φ(q) > 0 → 自由区，数值表示与障碍的“角度裕度”
-#     φ(q) < 0 → 障碍区，数值表示“穿透深度”（弧度）
-# =========================================================
 
-# ---------- 基础几何 ----------
 def _point_to_seg_dist(px, py, ax, ay, bx, by):
 	vx, vy = bx-ax, by-ay
 	wx, wy = px-ax, py-ay
@@ -44,9 +37,8 @@ def _seg_intersect(a,b,c,d):
 	if abs(o4)<1e-12 and _on_seg(cx,cy,bx,by,dx,dy): return True
 	return False
 
-# ---------- 线段到多边形的最近距离（碰撞=0） ----------
 def _drop_periodic_duplicates(theta, grid):
-	"""去掉 linspace(..., endpoint=True) 带来的 2π 重复行/列"""
+	
 	t1, t2 = theta; g = grid
 	if np.isclose((t1[-1]-t1[0]) % (2*np.pi), 0.0) and len(t1) > 1:
 		t1 = t1[:-1]; g = g[:-1, :]
@@ -55,20 +47,7 @@ def _drop_periodic_duplicates(theta, grid):
 	return (t1, t2), g
 
 def cobs_sdf_on_torus(theta, c_space):
-	"""
-	输入：
-		theta   - (θ1 网格, θ2 网格)，都在 [0, 2π) 上
-		c_space - 二维数组，c_space>0 表示 C-obs，占据的配置
-	输出：
-		(θ1, θ2), sdf - 同样大小的 SDF 网格，单位=弧度
-	方法：
-		1. 把 C-obs 二值化：obs=True 表示障碍，False 表示自由
-		2. 在环面上做欧式距离变换：
-				- d_out: 点到自由区的最短角度距离
-				- d_in : 点到障碍区的最短角度距离
-				- sdf   = d_out - d_in
-		3. 为了处理周期边界，在 θ1, θ2 上做 3×3 平铺，再取中心块
-	"""
+
 	(t1, t2), obs0 = _drop_periodic_duplicates(theta, c_space)
 	obs = (obs0 > 0)
 	dth1 = float(t1[1]-t1[0]); dth2 = float(t2[1]-t2[0])
@@ -82,6 +61,7 @@ def cobs_sdf_on_torus(theta, c_space):
 	
 	# 取中心块
 	sdf = sdf_t[H:2*H, W:2*W]
+	
 	return (t1, t2), sdf
 
 def wrap_samples_to_period(samples, theta):

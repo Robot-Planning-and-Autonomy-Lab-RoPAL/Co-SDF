@@ -129,7 +129,7 @@ if __name__ == "__main__":
         description="按 Boor et al. (1999) 思路实现的 Gaussian 近边界采样（循环接受-拒绝，直到凑满样本）"
     )
     parser.add_argument("-w", "--world", default="config/block_world.yaml", help="World 配置文件")
-    parser.add_argument("-n", "--n-train", type=int, default=10000, help="希望输出的总样本数（in+out）")
+    parser.add_argument("-n", "--n-train", type=int, default=5000, help="希望输出的总样本数（in+out）")
     parser.add_argument("--outdir", type=str, default="inputs_gaussian", help="输出目录")
     parser.add_argument("-prefix", type=str, default=None, help="文件名前缀（默认用 world 文件名）")
     parser.add_argument("-sigma", "--sigma-pair", type=float, default=0.03, help="高斯扰动比例 σ（相对每维 span）")
@@ -187,7 +187,7 @@ if __name__ == "__main__":
             plt.scatter(X_out[:, 0], X_out[:, 1], c='blue', s=5, label="Free")
         plt.xlabel(r"$\theta_1$")
         plt.ylabel(r"$\theta_2$")
-        plt.title(f"Gaussian-PRM near-boundary samples ({args.n_train})")
+        plt.title(f"C-space Gaussian Pair {args.n_train} Samples")
         plt.legend(loc="lower right", frameon=True, framealpha=0.9)
         out_path = os.path.join(args.outdir, f"{prefix}_gaussianPRM_{args.n_train}.png")
         plt.savefig(out_path, dpi=300, bbox_inches='tight')

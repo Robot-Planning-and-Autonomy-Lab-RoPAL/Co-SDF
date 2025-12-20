@@ -96,7 +96,7 @@ def extract_train_point_cloud_gaussian_pairs(n_pts, bounds, pool, sigma_pair=0.0
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="C-space Gaussian Sampling Dataset Generator", description="Generate a dataset to train a neural distance field from Gaussian sampling")
     parser.add_argument('-w', '--world', default='config/block_world.yaml', help='World definition (obstacles)')
-    parser.add_argument("-n", "--n-train", type=int, default=10000, help="number of samples in the training set")
+    parser.add_argument("-n", "--n-train", type=int, default=5000, help="number of samples in the training set")
     parser.add_argument("--outdir", type=str, default="inputs_gaussian", help="输出目录")
     parser.add_argument("-prefix", type=str, default=None, help="文件名前缀")
     parser.add_argument("-sigma", "--sigma-pair", type=float, default=0.05, help="noise scale for near-boundary sampling")

@@ -36,79 +36,106 @@ def vector_field_from_array(pos, vec, scale=1.) -> M.mesh.PolyLine:
     return M.mesh.PolyLine(pl)
 
 
-def render_sdf_2d(render_path, contour_path, gradient_path, model, domain : M.geometry.AABB, device, res=1000, batch_size=1000):
-    """ Renders a 2D SDF
-
-    Args:
-        render_path (str): Path to export a color render
-        contour_path (str): Path to export the contour plot
-        gradient_path (str): Path to export the gradient norm plot
-        model : SDF neural model
-        domain (M.geometry.AABB): axis aligned bounding box of dimension 2to represent the plotting domain.
-        device (str): cpu or cuda
-        res (int, optional): Image resolution. Defaults to 800.
-        batch_size (int, optional): Size of forward batches. Defaults to 1000.        
-    """
+def render_sdf_2d(render_path, contour_path, gradient_path, model, domain: M.geometry.AABB,
+                  device, res=1000, batch_size=1000, pi_ticks=True, pi_mode="0-2pi"):
     assert domain.dim == 2
-
+    
     X = np.linspace(domain.mini[0], domain.maxi[0], res)
-    resY = round(res * domain.span[1]/domain.span[0])
+    resY = round(res * domain.span[1] / domain.span[0])
     Y = np.linspace(domain.mini[1], domain.maxi[1], resY)
-
-    pts = np.hstack((np.meshgrid(X,Y))).swapaxes(0,1).reshape(2,-1).T
+    
+    pts = np.hstack((np.meshgrid(X, Y))).swapaxes(0, 1).reshape(2, -1).T
     if gradient_path is not None:
-        dist_values,grad_values = forward_in_batches(
-            model, pts, device, 
+        dist_values, grad_values = forward_in_batches(
+            model, pts, device,
             compute_grad=True, batch_size=batch_size)
     else:
         dist_values = forward_in_batches(model, pts, device, compute_grad=False, batch_size=batch_size)
-
-    img = np.concatenate(dist_values).reshape((res,resY)).T
-    img = img[::-1,:]
-
+        
+    img = np.concatenate(dist_values).reshape((res, resY)).T
+    img = img[::1, :]
+    
     vmin = np.amin(img)
     vmax = np.amax(img)
-    if vmin>0 or vmax<0:
-        vmin,vmax = -1, 1
-
+    if vmin > 0 or vmax < 0:
+        vmin, vmax = -1, 1
+        
+    extent = [domain.mini[0], domain.maxi[0], domain.mini[1], domain.maxi[1]]
+    
+    def _apply_pi_ticks(ax):
+        # 显示成 [-pi, pi] 风格的标签
+        labels = [r"$-\pi$", r"$-\pi/2$", r"$0$", r"$\pi/2$", r"$\pi$"]
+        
+        if pi_mode == "0-2pi":
+            # 轴真实范围是 [0, 2pi]，但显示成 [-pi, pi]
+            ticks = [0, np.pi/2, np.pi, 3*np.pi/2, 2*np.pi]
+        elif pi_mode == "-pi-pi":
+            # 轴真实范围就是 [-pi, pi]
+            ticks = [-np.pi, -np.pi/2, 0.0, np.pi/2, np.pi]
+        else:
+            return  # 未知模式就不动
+        
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(labels)
+        ax.set_yticks(ticks)
+        ax.set_yticklabels(labels)
+        
     if render_path is not None:
         norm = colors.TwoSlopeNorm(vmin=vmin, vmax=vmax, vcenter=0)
         plt.clf()
-        pos = plt.imshow(img, cmap="seismic", norm=norm, origin='lower')
-
+        pos = plt.imshow(img, cmap="seismic", norm=norm, origin='lower', extent=extent)
+        ax = plt.gca()
+        ax.set_aspect("equal", adjustable="box")
+        
+        if pi_ticks:
+            _apply_pi_ticks(ax)
+            
         plt.xlabel(r"$\theta_1$")
         plt.ylabel(r"$\theta_2$")
-
         plt.colorbar(pos)
         plt.savefig(render_path, bbox_inches='tight', pad_inches=0)
-        plt.close() 
-
+        plt.close()
+        
     if contour_path is not None:
         plt.clf()
         norm = colors.TwoSlopeNorm(vmin=vmin, vmax=vmax, vcenter=0)
-        plt.imshow(img, cmap="bwr", norm=norm, origin='lower')
-
+        plt.imshow(img, cmap="bwr", norm=norm, origin='lower', extent=extent)
+        ax = plt.gca()
+        ax.set_aspect("equal", adjustable="box")
+        
+        if pi_ticks:
+            _apply_pi_ticks(ax)
+            
         plt.xlabel(r"$\theta_1$")
         plt.ylabel(r"$\theta_2$")
-        # cs = plt.contourf(X,-Y,img, levels=np.linspace(-0.1,0.1,11), cmap="seismic", extend="both")
-        # cs.changed()
-        plt.contour(img, levels=16, colors='k', linestyles="solid", linewidths=0.3)
-        plt.contour(img, levels=[0.], colors='k', linestyles="solid", linewidths=0.6)
+        
+        XX, YY = np.meshgrid(X, Y)
+        plt.contour(XX, YY, img, levels=16, colors='k', linestyles="solid", linewidths=0.3)
+        plt.contour(XX, YY, img, levels=[0.], colors='k', linestyles="solid", linewidths=0.6)
         plt.savefig(contour_path, bbox_inches='tight', pad_inches=0, dpi=200)
-
+        plt.close()
+        
     if gradient_path is not None:
-        grad_norms = np.linalg.norm(grad_values,axis=1)
-        grad_img = grad_norms.reshape((res,resY)).T
-        grad_img = grad_img[::-1,:]
+        grad_norms = np.linalg.norm(grad_values, axis=1)
+        grad_img = grad_norms.reshape((res, resY)).T
+        grad_img = grad_img[::-1, :]
         print("GRAD NORM INTERVAL", (np.min(grad_img), np.max(grad_img)))
-
+        
         plt.clf()
-        pos = plt.imshow(grad_img, vmin=0.5, vmax=1.5, cmap="bwr",origin='lower')
-        plt.contour(img, levels=[0.], colors='k', linestyles="solid", linewidths=0.6)
+        pos = plt.imshow(grad_img, vmin=0.5, vmax=1.5, cmap="bwr", origin='lower', extent=extent)
+        ax = plt.gca()
+        ax.set_aspect("equal", adjustable="box")
+        
+        if pi_ticks:
+            _apply_pi_ticks(ax)
+            
+        XX, YY = np.meshgrid(X, Y)
+        plt.contour(XX, YY, img, levels=[0.], colors='k', linestyles="solid", linewidths=0.6)
         plt.xlabel("x")
         plt.ylabel("y")
         plt.colorbar(pos)
         plt.savefig(gradient_path, bbox_inches='tight', pad_inches=0)
+        plt.close()
 
 def render_sdf_quad(render_path, contour_path, gradient_path, model, P0, P1, P2, device, res=800, batch_size=1000, **kwargs):
     """
@@ -132,6 +159,7 @@ def render_sdf_quad(render_path, contour_path, gradient_path, model, P0, P1, P2,
     X = np.linspace(0,1, res)
     resY = round(res * M.geometry.norm(dy)/M.geometry.norm(dx))
     Y = np.linspace(0,1, resY)
+    extent = [0, 1, 0, 1]
 
     pts = []
     for ax in X:
@@ -160,7 +188,14 @@ def render_sdf_quad(render_path, contour_path, gradient_path, model, P0, P1, P2,
     if render_path is not None:
         norm = colors.TwoSlopeNorm(vmin=vmin, vmax=vmax, vcenter=0)
         plt.clf()
-        pos = plt.imshow(img, cmap="seismic", norm=norm, origin='lower')
+        pos = plt.imshow(
+            img,
+            cmap="seismic",
+            norm=norm,
+            origin='lower',
+            extent=extent
+        )
+        plt.gca().set_aspect("equal", adjustable="box")
         plt.xlabel("x")
         plt.ylabel("y")
         plt.colorbar(pos)
@@ -169,13 +204,16 @@ def render_sdf_quad(render_path, contour_path, gradient_path, model, P0, P1, P2,
     if contour_path is not None:
         plt.clf()
         norm = colors.TwoSlopeNorm(vmin=vmin, vmax=vmax, vcenter=0)
-        plt.imshow(img, cmap="bwr", norm=norm, origin='lower')
+        plt.imshow(img, cmap="bwr", norm=norm, origin='lower', extent=extent)
+        
         plt.xlabel("x")
         plt.ylabel("y")
         # cs = plt.contourf(X,-Y,img, levels=np.linspace(-0.1,0.1,11), cmap="seismic", extend="both")
         # cs.changed()
-        plt.contour(img, levels=kwargs.get("n_levels", 16), colors='k', linestyles="solid", linewidths=0.5)
-        plt.contour(img, levels=[kwargs.get("zero_contour_offset", 0.)], colors='k', linestyles="solid", linewidths=0.6)
+        plt.gca().set_aspect("equal", adjustable="box")
+        XX, YY = np.meshgrid(X, Y)
+        plt.contour(XX, YY, img, levels=kwargs.get("n_levels", 16), colors='k', linestyles="solid", linewidths=0.5)
+        plt.contour(XX, YY, img, levels=[kwargs.get("zero_contour_offset", 0.)], colors='k', linestyles="solid", linewidths=0.6)
         plt.savefig(contour_path, bbox_inches='tight', pad_inches=0, dpi=kwargs.get("dpi", 500))
 
     if gradient_path is not None:
@@ -185,8 +223,10 @@ def render_sdf_quad(render_path, contour_path, gradient_path, model, P0, P1, P2,
         print("GRAD NORM INTERVAL", (np.min(grad_img), np.max(grad_img)))
 
         plt.clf()
-        pos = plt.imshow(grad_img, vmin=0.5, vmax=1.5, cmap="bwr", origin='lower')
-        plt.contour(img, levels=[0.], colors='k', linestyles="solid", linewidths=0.6)
+        pos = plt.imshow(grad_img, vmin=0.5, vmax=1.5, cmap="bwr", origin='lower', extent=extent)
+        plt.gca().set_aspect("equal", adjustable="box")
+        XX, YY = np.meshgrid(X, Y)
+        plt.contour(XX, YY, img, levels=[0.], colors='k', linestyles="solid", linewidths=0.6)
         plt.xlabel("x")
         plt.ylabel("y")
         plt.colorbar(pos)

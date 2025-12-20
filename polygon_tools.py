@@ -18,6 +18,7 @@
 # //        such as an AVL, a 2-3, or a  red-black tree
 # //        with methods given by the  placeholder code:
 
+import math
 from collections import namedtuple
 
 # Points should be 2-tuple (x,y)
@@ -128,29 +129,34 @@ class Polygon(PointList):
         return wn
 
     def intersect(self, poly2):
-        assert isinstance(poly2, Polygon)
+        # 允许 Circle 等其它形状先 to_polygon 再检测
+        if not isinstance(poly2, Polygon):
+            if hasattr(poly2, "to_polygon"):
+                poly2 = poly2.to_polygon()  # 可传 n=64/96/128 控制精度
+            else:
+                raise TypeError("intersect() expects a Polygon or an object with to_polygon().")
+                
         bounds1 = self.get_bounds()
         bounds2 = poly2.get_bounds()
-
+        
         if (bounds2[1] <= bounds1[0] or bounds2[0] >= bounds1[1] or
-                bounds2[3] <= bounds1[2] or bounds2[2] >= bounds1[3]):
+            bounds2[3] <= bounds1[2] or bounds2[2] >= bounds1[3]):
             return False
-
+    
         for p in poly2:
             if self.point_inside(p):
                 return True
         for p in self:
             if poly2.point_inside(p):
                 return True
-
-        all_edges = []
+            
         def add_ordered_edges(edge_list, new_edges):
             for p0, p1 in new_edges:
                 if p0 < p1:
                     edge_list.append(OrderedEdge(p0, p1))
                 else:
                     edge_list.append(OrderedEdge(p1, p0))
-
+                    
         my_edges = []
         add_ordered_edges(my_edges, self.edges())
         your_edges = []
@@ -160,7 +166,6 @@ class Polygon(PointList):
                 if line_intersect(e1, e2):
                     return True
         return False
-
         """ Something (occasionally) wrong with my edge ordering in Shamos-Hoey booooooo~~ """
         # add_ordered_edges(all_edges, self.edges())
         # add_ordered_edges(all_edges, poly2.edges())
@@ -280,8 +285,93 @@ def is_left(p0, p1, p2):
     return (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y)
 
 # ===================================================================
-
-
+class Circle:
+    """
+    A 2D circle defined by center (x, y) and radius r.
+    Provides compatibility with Polygon geometry by allowing
+    conversion to an approximate polygon.
+    """
+    
+    def __init__(self, center, radius):
+        if not isinstance(center, Point):
+            center = Point(*center)
+        self.center = center
+        self.radius = float(radius)
+        
+    def __repr__(self):
+        return f"Circle(center=({self.center.x:.2f},{self.center.y:.2f}), r={self.radius:.2f})"
+    
+    def get_bounds(self):
+        """Return the bounding box [minx, maxx, miny, maxy]."""
+        return [
+            self.center.x - self.radius,
+            self.center.x + self.radius,
+            self.center.y - self.radius,
+            self.center.y + self.radius
+        ]
+    
+    def point_inside(self, p):
+        """Check if a point (Point or tuple) lies inside or on the circle."""
+        if not isinstance(p, Point):
+            p = Point(*p)
+        dx = p.x - self.center.x
+        dy = p.y - self.center.y
+        return (dx * dx + dy * dy) <= (self.radius * self.radius)
+    
+    def intersect(self, poly2):
+        # 允许其它形状（如 Circle）通过 to_polygon() 转换后再做相交检测
+        if not isinstance(poly2, Polygon):
+            if hasattr(poly2, "to_polygon"):
+                poly2 = poly2.to_polygon()  # 可传 n=64/96/128 控制精度
+            else:
+                raise TypeError("intersect() expects a Polygon or an object with to_polygon().")
+                
+        bounds1 = self.get_bounds()
+        bounds2 = poly2.get_bounds()
+        
+        if (bounds2[1] <= bounds1[0] or bounds2[0] >= bounds1[1] or
+            bounds2[3] <= bounds1[2] or bounds2[2] >= bounds1[3]):
+            return False
+    
+        for p in poly2:
+            if self.point_inside(p):  # winding number 非0即真
+                return True
+        for p in self:
+            if poly2.point_inside(p):
+                return True
+            
+        def add_ordered_edges(edge_list, new_edges):
+            for p0, p1 in new_edges:
+                if p0 < p1:
+                    edge_list.append(OrderedEdge(p0, p1))
+                else:
+                    edge_list.append(OrderedEdge(p1, p0))
+                    
+        my_edges = []
+        add_ordered_edges(my_edges, self.edges())
+        your_edges = []
+        add_ordered_edges(your_edges, poly2.edges())
+    
+        for e1 in my_edges:
+            for e2 in your_edges:
+                if line_intersect(e1, e2):
+                    return True
+        return False
+    
+    def to_polygon(self, n=64):
+        """
+        Approximate the circle as an n-sided polygon.
+        Useful for using Polygon-based intersection algorithms.
+        """
+        pts = []
+        for i in range(n):
+            theta = 2 * math.pi * i / n
+            x = self.center.x + self.radius * math.cos(theta)
+            y = self.center.y + self.radius * math.sin(theta)
+            pts.append(Point(x, y))
+        return Polygon(pts)
+# ===================================================================
+    
 class Event:
     def __init__(self, edge_id, is_left_end, vertex):
         self.edge_id = edge_id
@@ -340,3 +430,4 @@ class SweepLine:
         else:
             new_seg = SweepLineSegment(event.edge_id, p_left=v1, p_right=v0)
         self.tree[event.edge_id] = new_seg
+        

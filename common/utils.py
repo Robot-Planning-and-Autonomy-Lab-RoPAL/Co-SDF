@@ -5,11 +5,12 @@ import mouette as M
 from tqdm import tqdm
 import numpy as np
 
-def get_device(force_cpu=False):
-    if force_cpu or not torch.cuda.is_available():
-        return torch.device("cpu")
-    else:
+def get_device():
+    if torch.cuda.is_available():
         return torch.device("cuda")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
     
 def get_BB(X, dim, pad=0.):
     """Get the axis-aligned bounding box of points in tensor X
