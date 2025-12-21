@@ -26,10 +26,8 @@ if __name__ == "__main__":
 		)
 	
 		# dataset parameters
-		parser.add_argument("--dataset", type=str, default="block_world",
-							help="prefix of dataset files, e.g. 'block_world'")
-		parser.add_argument("--data", type=str, default="inputs",
-							help="directory where the dataset npy/npz files are stored")	
+		parser.add_argument("--dataset", type=str, default="block_world", help="prefix of dataset files, e.g. 'block_world'")
+		parser.add_argument("--data", type=str, default="inputs", help="directory where the dataset npy/npz files are stored")	
 		parser.add_argument("-o", "--output-name", type=str, default="block_world_2000_periodic", help="custom output folder name")
 		parser.add_argument("--unsigned", action="store_true", help="flag for training an unsigned distance field instead of a signed one")
 	
