@@ -235,10 +235,7 @@ if __name__ == "__main__":
     except KeyError:
         map_lims = [[0, 10], [0, 10]]
         
-    # 用 C-space 网格直接构造 C-obs 的 SDF（弧度）
-    theta_per, sdf_grid = cobs_sdf_on_torus(theta, c_space)
-                
-    # —— 用 C-space 网格构造 SDF（弧度）——
+    # Build C-obstacle SDF
     theta_per, sdf_grid = cobs_sdf_on_torus(theta, c_space)
     
     vmax = np.nanpercentile(np.abs(sdf_grid), 99)
