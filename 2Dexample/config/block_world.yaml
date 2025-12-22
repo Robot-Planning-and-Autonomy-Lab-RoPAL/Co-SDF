@@ -1,0 +1,16 @@
+robot:
+  type: RobotArm2D
+  parameters:
+    base_position: [5.0, 5.0]
+    link_lengths: [2.1, 2.1]
+
+workspace:
+  type: Workspace2D
+  parameters:
+    limits: [[0, 10.0], [0, 10.0]]
+
+    obstacles:
+      - type: Circle
+        parameters:
+          center: [3.0, 4.0]
+          radius: 1.5
