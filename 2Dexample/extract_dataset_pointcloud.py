@@ -25,32 +25,29 @@ def _oracle_worker(q):
 	return 1
 
 def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.5, sigma=0.05, pool=None):
-	"""
-	使用高斯采样策略生成 C-space 训练点：
-	1. 随机采样点 q1
-	2. 在 q1 附近采样 q2 (q2 = q1 + sigma)
-	3. 如果 q1, q2 碰撞状态不同（一个free一个obs），则保留为边界样本
-	4. 混合一定比例的全局均匀样本，保证空间覆盖
 
+	"""
+	Generate C-space training dataset using Gaussian sampling.
 	Args:
-		n_pts (int): 目标总样本数
+		n_pts (int): Total number of samples
 		bounds (list): [(min, max), ...]
 		oracle: (unused, uses global _GLOBAL_PROBLEM)
-		near_ratio (float): 边界样本占比 (0.0~1.0). 建议 0.5~0.8
-		sigma (float): 高斯扰动标准差 (相对于轴长)
+		near_ratio (float): Boundary sample ratio (0.0–1.0)
+		sigma (float): Gaussian noise std (relative to axis length)
 		pool: multiprocessing pool
 	"""
+
 	dim = len(bounds)
 	lo = np.array([b[0] for b in bounds], float)
 	hi = np.array([b[1] for b in bounds], float)
 	span = hi - lo
 
-	# Helper: Uniform sampling
+	# Uniform sampling
 	def sample_uniform(m):
 		if m <= 0: return np.zeros((0, dim))
 		return lo + np.random.rand(m, dim) * span
 
-	# Helper: Parallel labeling
+	# Parallel labeling
 	def parallel_label(points, desc):
 		if len(points) == 0: return np.array([], dtype=int)
 		# chunksize affects performance, 1024 is reasonable
@@ -64,12 +61,11 @@ def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.5, sigma=0.05,
 	n_boundary = int(n_pts * near_ratio)
 	n_uniform  = n_pts - n_boundary
 	
-	# --- 1. Boundary Sampling (Gaussian Pairs) ---
+	# Boundary Sampling
 	if n_boundary > 0:
 		print(f"Sampling {n_boundary} boundary points (Gaussian pairs)...")
-		# We need to find enough pairs. Success rate varies (e.g. 10-20% near surfaces).
-		# We'll sample in batches until we have enough.
-		batch_size = n_pts * 2 # Heuristic
+
+		batch_size = n_pts * 2 
 		
 		pbar = tqdm(total=n_boundary, desc="Found Boundary Pts", ncols=80)
 		
@@ -104,8 +100,6 @@ def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.5, sigma=0.05,
 			pbar.n = min(current_count, n_boundary)
 			pbar.refresh()
 			
-			# Reduce batch size for next iter to avoid massive over-sampling? 
-			# But collision check is expensive, better to oversample slightly and cut.
 			if current_count >= n_boundary:
 				break
 				
@@ -115,20 +109,13 @@ def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.5, sigma=0.05,
 	X_in_bound = np.array(X_in_all)
 	X_out_bound = np.array(X_out_all)
 
-	# Trim to exact needed boundary count (balanced removal to keep pairs? 
-	# Actually pairs are good, but we just need individual points for the dataset finally)
-	# Whatever, just pool them.
-	
-	# --- 2. Uniform Sampling (Global Coverage) ---
-	# We might need to generate more to fill up to n_pts
+	# Uniform Sampling
 	cur_total = len(X_in_bound) + len(X_out_bound)
 	n_uniform_needed = max(n_pts - cur_total, 0)
 	
 	if n_uniform_needed > 0:
 		print(f"Sampling {n_uniform_needed} uniform points...")
-		# Sample uniform
-		# Note: purely uniform sampling might be imbalanced (mostly free or mostly obs).
-		# We just accept the distribution of the C-space.
+
 		U = sample_uniform(n_uniform_needed)
 		lU = parallel_label(U, "Label Uniform")
 		
@@ -145,24 +132,14 @@ def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.5, sigma=0.05,
 		X_in = X_in_bound
 		X_out = X_out_bound
 
-	# --- 3. Final Shuffle & Trim ---
-	# Ensure we don't have TOO many if we oversampled
-	# (Though our logic tries to be exact, pairs come in 2s)
-	
-	# Current sets
+	# Final Shuffle & Trim
 	if len(X_in) == 0: X_in = np.zeros((0, dim))
 	if len(X_out) == 0: X_out = np.zeros((0, dim))
 	
-	# To respect n_pts exactly, we might need to trim.
-	# Let's just return everything we found, it's roughly n_pts.
-	# Or strict trim:
 	total_have = len(X_in) + len(X_out)
 	if total_have > n_pts:
 		# Randomly remove
 		keep_idx = np.random.permutation(total_have)[:n_pts]
-		# It's hard to index separated arrays. 
-		# Let's stack, shuffle, split? No, we need to return separated.
-		# Simple ratio trim.
 		frac = n_pts / total_have
 		n_in_keep = int(len(X_in) * frac)
 		n_out_keep = n_pts - n_in_keep
@@ -196,11 +173,11 @@ if __name__ == "__main__":
 		
 	arm_problem = robot_tools.PlanningProblem(args.world)
 	theta, c_space = arm_problem.construct_config_space(nx=101)
-		
-#	角度范围（与 construct_config_space 一致）
+	
+	# Angle range
 	bounds = [(theta[0][0], theta[0][-1]), (theta[1][0], theta[1][-1])]
 	
-#	uniform sampling with multiprocessing
+	# uniform sampling with multiprocessing
 	n_workers = os.cpu_count() or 4
 	with Pool(processes=n_workers, initializer=_init_oracle, initargs=(args.world,)) as pool:
 		t0 = time.time()
@@ -216,13 +193,12 @@ if __name__ == "__main__":
 		
 	print(f"Random sampling takes {t1 - t0:.3f} second with {n_workers} workers")
 	
-	np.save(os.path.join(outdir, f"{prefix}_Xtrain_in.npy"),  X_in)      # 碰撞点（obs）
-	np.save(os.path.join(outdir, f"{prefix}_Xtrain_out.npy"), X_out)     # 可行点（free）
-	np.save(os.path.join(outdir, f"{prefix}_cspace.npy"),     c_space)   # 占据图（0/1 或 bool）
-	np.save(os.path.join(outdir, f"{prefix}_theta0.npy"),     theta[0])  # θ1 轴坐标
-	np.save(os.path.join(outdir, f"{prefix}_theta1.npy"),     theta[1])  # θ2 轴坐标
+	np.save(os.path.join(outdir, f"{prefix}_Xtrain_in.npy"),  X_in)      # C_obs
+	np.save(os.path.join(outdir, f"{prefix}_Xtrain_out.npy"), X_out)     # C_free
+	np.save(os.path.join(outdir, f"{prefix}_cspace.npy"),     c_space)   # Occupancy
+	np.save(os.path.join(outdir, f"{prefix}_theta0.npy"),     theta[0])  # theta 1
+	np.save(os.path.join(outdir, f"{prefix}_theta1.npy"),     theta[1])  # theta 2
 	
-	# === Generate test set ===
 	print("\nGenerate test set")
 	with Pool(processes=n_workers, initializer=_init_oracle, initargs=(args.world,)) as pool:
 		Xtest_in, Xtest_out = extract_train_point_cloud(
