@@ -122,7 +122,6 @@ if __name__ == "__main__":
 				# x: (N, 2) -> (N, 4) [cos, sin, cos, sin]
 				return torch.cat([torch.cos(x), torch.sin(x)], dim=-1)
 
-		# Original dimension is 2, but embedded is 4
 		embedding = PeriodicEmbedding()
 		model_core = select_model(args.model, DIM * 2, args.n_layers, args.n_hidden)
 		
@@ -156,7 +155,7 @@ if __name__ == "__main__":
 					[0.0, 0.0],
 					[2*np.pi, 2*np.pi]
 				)		
-				# 强制从0开始，保持原来的 span
+
 				if DIM == 2:
 						plot_domain = M.geometry.AABB([0.0, 0.0], [plot_domain.maxi[0], plot_domain.maxi[1]])
 				else:
