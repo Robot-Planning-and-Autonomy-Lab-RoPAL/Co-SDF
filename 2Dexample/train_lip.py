@@ -26,9 +26,9 @@ if __name__ == "__main__":
 		)
 	
 		# dataset parameters
-		parser.add_argument("--dataset", type=str, default="block_world", help="prefix of dataset files, e.g. 'block_world'")
-		parser.add_argument("--data", type=str, default="inputs", help="directory where the dataset npy/npz files are stored")	
-		parser.add_argument("-o", "--output-name", type=str, default="block_world_2000_periodic", help="custom output folder name")
+		parser.add_argument("--dataset", type=str, default="block_world4", help="prefix of dataset files, e.g. 'block_world'")
+		parser.add_argument("--data", type=str, default="inputs/gaussian_aabb", help="directory where the dataset npy/npz files are stored")	
+		parser.add_argument("-o", "--output-name", type=str, default="gaussian_aabb", help="custom output folder name")
 		parser.add_argument("--unsigned", action="store_true", help="flag for training an unsigned distance field instead of a signed one")
 	
 		# model parameters
@@ -37,7 +37,7 @@ if __name__ == "__main__":
 		parser.add_argument("-n-hidden", "--n-hidden", type=int, default=128, help="size of the layers")
 	
 		# optimization parameters
-		parser.add_argument("-ne", "--epochs", type=int, default=20, help="Number of training epochs")
+		parser.add_argument("-ne", "--epochs", type=int, default=200, help="Number of training epochs")
 		parser.add_argument('-bs',"--batch-size", type=int, default=200, help="Train batch size")
 		parser.add_argument("-tbs", "--test-batch-size", type = int, default = 5000, help="Test batch size")
 		parser.add_argument("-lr", "--learning-rate", type=float, default=5e-4, help="Adam's learning rate")

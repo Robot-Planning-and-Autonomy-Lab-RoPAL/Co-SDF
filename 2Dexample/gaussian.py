@@ -152,7 +152,7 @@ def extract_train_point_cloud(n_pts, bounds, oracle, near_ratio=0.5, sigma=0.05,
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(prog="C-space Dataset Generator", description="Generate a dataset to train a neural distance field from C-space sampling")
-	parser.add_argument('-w', '--world', default='config/block_world.yaml', help='World definition (obstacles)')
+	parser.add_argument('-w', '--world', default='config/block_world4.yaml', help='World definition (obstacles)')
 	parser.add_argument("-n", "--n-train", type=int, default=2000, help="number of samples in the training set")
 	parser.add_argument("-nt", "--n-test",  type=int, default=1000, help="number of samples in the test set")
 	parser.add_argument("-nti", "--n-test-boundary", type=int, default=500, help="number of points in the set dataset that are sampled _on_ the surface.")
@@ -163,7 +163,7 @@ if __name__ == "__main__":
 	parser.add_argument("-bal", "--balance", action="store_true", help="balance dataset: equal free/obs samples")
 	args = parser.parse_args()
 	
-	outdir = getattr(args, "outdir", "inputs")
+	outdir = getattr(args, "outdir", "inputs/gaussian")
 	os.makedirs(outdir, exist_ok=True)
 	
 	if hasattr(args, "prefix") and args.prefix is not None:
