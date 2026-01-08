@@ -1,16 +1,17 @@
-#!/usr/bin/env python3
 import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from types import SimpleNamespace
+from skimage import measure
 
 from utils import load_model
 
-
 def visualize_ndf():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model_path = "output/jaco_ndf/model_final.pt"
+    model_path = "output/ndf/model_final.pt"
+    out_dir = "output/ndf"
+    os.makedirs(out_dir, exist_ok=True)
+
     if not os.path.exists(model_path):
         print(f"Error: {model_path} not found.")
         return
@@ -26,7 +27,6 @@ def visualize_ndf():
     
     print(f"Predicting on {res}^3 grid...")
     with torch.no_grad():
-        # Process in batches to avoid OOM
         batch_size = 100000
         preds = []
         for i in range(0, len(grid_points), batch_size):
@@ -35,7 +35,28 @@ def visualize_ndf():
             preds.append(p)
         Z = np.concatenate(preds).reshape(res, res, res)
 
-    # 2. Plot 2D Slices
+    # 2. Extract OBJ using Marching Cubes
+    print("Extracting OBJ mesh using Marching Cubes...")
+    try:
+        # iso_level=0 is the decision boundary (collision vs free)
+        verts, faces, normals, values = measure.marching_cubes(Z, level=0)
+        
+        # Rescale vertices to [-pi, pi]
+        # Grid range [0, res-1] -> [-pi, pi]
+        verts = (verts / (res - 1)) * (2 * np.pi) - np.pi
+        
+        obj_path = os.path.join(out_dir, "final_3d_viz.obj")
+        with open(obj_path, 'w') as f:
+            for v in verts:
+                f.write(f"v {v[0]} {v[1]} {v[2]}\n")
+            for face in faces:
+                # OBJ indices are 1-based
+                f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
+        print(f"OBJ mesh saved to {obj_path}")
+    except Exception as e:
+        print(f"Marching Cubes failed: {e}")
+
+    # 3. Plot 2D Slices
     print("Plotting 2D slices...")
     n_slices = 9
     slice_indices = np.linspace(0, res-1, n_slices, dtype=int)
@@ -47,7 +68,6 @@ def visualize_ndf():
         ax = axes[i]
         slice_data = Z[:, :, idx]
         
-        # Plot decision boundary
         im = ax.imshow(slice_data.T, origin='lower', extent=[-np.pi, np.pi, -np.pi, np.pi], 
                        cmap='RdBu', vmin=-0.5, vmax=0.5)
         ax.contour(ticks, ticks, slice_data.T, levels=[0], colors='black', linewidths=1)
@@ -57,21 +77,18 @@ def visualize_ndf():
         ax.set_ylabel("q2")
 
     plt.tight_layout()
-    slice_path = "output/jaco_ndf/ndf_slices.png"
+    slice_path = os.path.join(out_dir, "ndf_slices.png")
     plt.savefig(slice_path, dpi=300)
     print(f"Slices saved to {slice_path}")
 
-    # 3. 3D Scatter Plot of C-Obstacle
+    # 4. 3D Scatter Plot
     print("Generating 3D scatter plot...")
     plt.figure(figsize=(10, 8))
     ax = plt.axes(projection='3d')
     
-    # Points where pred < 0 (collision)
-    # Subsample for better visualization
     mask = Z < 0
     indices = np.where(mask)
     
-    # Subsample points if too many
     max_scatter = 10000
     if len(indices[0]) > max_scatter:
         idx = np.random.choice(len(indices[0]), max_scatter, replace=False)
@@ -89,12 +106,11 @@ def visualize_ndf():
     ax.set_ylabel("q2")
     ax.set_zlabel("q3")
     
-    # Set axis limits
     ax.set_xlim(-np.pi, np.pi)
     ax.set_ylim(-np.pi, np.pi)
     ax.set_zlim(-np.pi, np.pi)
 
-    scatter_path = "output/jaco_ndf/ndf_3d_scatter.png"
+    scatter_path = os.path.join(out_dir, "ndf_3d_scatter.png")
     plt.savefig(scatter_path, dpi=300)
     print(f"3D scatter saved to {scatter_path}")
 

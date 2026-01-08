@@ -45,7 +45,16 @@ def load_model(model_path, device, n_dim=3, n_layers=20, n_hidden=128, model_typ
     model = nn.Sequential(embedding, model_core).to(device)
     
     # Load weights
-    state_dict = torch.load(model_path, map_location=device)
+    checkpoint = torch.load(model_path, map_location=device)
+    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    else:
+        state_dict = checkpoint
+    
+    # Filter out metadata keys like "id" or "meta" that are not in the model
+    model_keys = set(model.state_dict().keys())
+    state_dict = {k: v for k, v in state_dict.items() if k in model_keys}
+    
     model.load_state_dict(state_dict)
     model.eval()
     

@@ -24,8 +24,8 @@ class JacoEnv():
         self.init_qpos = self.data.qpos.ravel().copy()
         self.init_qvel = self.data.qvel.ravel().copy()
 
-        # Renderer for camera views
-        self.renderer = mujoco.Renderer(self.model, self.height, self.width)
+        # Renderer will be initialized lazily
+        self._renderer = None
 
         # Setup actuators
         self.actuator_bounds = self.model.actuator_ctrlrange
@@ -64,6 +64,12 @@ class JacoEnv():
         self.set_qpos_qvel(qpos, qvel)
 
         return self.get_obs()
+
+    @property
+    def renderer(self):
+        if self._renderer is None:
+            self._renderer = mujoco.Renderer(self.model, self.height, self.width)
+        return self._renderer
 
     def render(self, camera_name=None):
         self.renderer.update_scene(self.data, camera=camera_name)

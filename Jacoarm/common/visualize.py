@@ -274,15 +274,10 @@ def reconstruct_surface_marching_cubes(model, domain, device, iso=0, res=100, ba
     
     ### Reproject meshes to correct coordinates
     for key,mesh in to_save.items():
-        for v in mesh.id_vertices:
-            pV = M.Vec(mesh.vertices[v])
-            # 将 verts 映射到实际坐标
-            verts = np.array(verts)  # shape (N,3)
-            for i in range(3):
-                verts[:, i] = np.interp(verts[:, i], np.arange(res), L[i])
-                
-            # 更新 Mouette 网格
-            m.vertices = [M.Vec(*v) for v in verts]
-
+        # Map indices to actual coordinates using numpy for efficiency
+        # mesh.vertices is a Mouette vertex container, we can iterate and update
+        for i,v in enumerate(mesh.vertices):
+            new_v = [np.interp(v[j], np.arange(res), L[j]) for j in range(3)]
+            mesh.vertices[i] = M.Vec(*new_v)
         to_save[key] = mesh
     return to_save
