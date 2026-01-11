@@ -3,5 +3,6 @@ __pycache__/
 *.pyc
 
 # Ignore input/output data
+.ipynb_checkpoints/
 inputs/
 output/

@@ -68,11 +68,33 @@ class Trainer(M.Logger):
             for (X_in, X_out) in tqdm(zip(*self.train_loaders), total=train_length):
                 if X_in[0].shape != X_out[0].shape: continue
                 self.optimizer.zero_grad() # zero the parameter gradients
-                # forward + backward + optimize
-                Y_in = model(X_in[0]) # forward computation
-                Y_out = model(X_out[0])
+                
+                points_in = X_in[0]
+                points_out = X_out[0]
+                
+                # Enable grad for Eikonal
+                if hasattr(self.config, "eikonal_weight") and self.config.eikonal_weight > 0:
+                    points_in.requires_grad = True
+                    points_out.requires_grad = True
+
+                Y_in = model(points_in)
+                Y_out = model(points_out)
+                
                 batch_loss_hkr = torch.sum(lossfun_hkr(-Y_in) + lossfun_hkr(Y_out))
                 total_batch_loss = batch_loss_hkr
+                
+                # Eikonal Regularization
+                if hasattr(self.config, "eikonal_weight") and self.config.eikonal_weight > 0:
+                    # Calculate gradients on boundary/straddling points
+                    # (Here we use both in/out points for simplicity)
+                    grad_in = torch.autograd.grad(Y_in, points_in, grad_outputs=torch.ones_like(Y_in), create_graph=True)[0]
+                    grad_out = torch.autograd.grad(Y_out, points_out, grad_outputs=torch.ones_like(Y_out), create_graph=True)[0]
+                    
+                    eik_loss = ( (grad_in.norm(dim=-1) - 1)**2 + (grad_out.norm(dim=-1) - 1)**2 ).mean()
+                    total_batch_loss += self.config.eikonal_weight * eik_loss
+                    if "eik" not in train_loss: train_loss["eik"] = 0.
+                    train_loss["eik"] += float(eik_loss.detach())
+
                 total_batch_loss.backward() # call back propagation
                 train_loss["hkr"] += float(batch_loss_hkr.detach())
                 self.optimizer.step() 

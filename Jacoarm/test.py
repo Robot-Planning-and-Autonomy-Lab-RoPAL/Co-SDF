@@ -36,7 +36,14 @@ def _init_oracle(model_path):
 
 def _oracle_worker(q):
     env = _GLOBAL_ENV
+    
+    # 0. Check Joint Limits first
     for i in range(len(q)):
+        if env.model.jnt_limited[i]:
+            lo, hi = env.model.jnt_range[i]
+            if q[i] < lo or q[i] > hi:
+                return -1 # Joint limit violation = Collision
+        
         env.data.qpos[i] = q[i]
     
     mujoco.mj_forward(env.model, env.data)
@@ -230,7 +237,7 @@ def evaluate(args, device):
         return
 
     n_dim = 3 # Detected from XML usually
-    model = load_model(model_path, device, n_dim=n_dim, n_layers=args.n_layers, n_hidden=args.n_hidden)
+    model = load_model(model_path, device, n_dim=n_dim, n_layers=args.n_layers, n_hidden=args.n_hidden, frequencies=args.frequencies)
     bounds = [(-np.pi, np.pi)] * n_dim
 
     n_workers = os.cpu_count() or 4
@@ -274,9 +281,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model-path', default="output/ndf/model_final.pt")
     parser.add_argument('--mujoco-model', default='jaco_3dof.xml')
-    parser.add_argument('--n-samples', type=int, default=10000)
+    parser.add_argument('--n-samples', type=int, default=50000)
     parser.add_argument('--n-layers', type=int, default=20)
-    parser.add_argument('--n-hidden', type=int, default=128)
+    parser.add_argument('--n-hidden', type=int, default=256)
+    parser.add_argument('--frequencies', type=int, nargs='+', default=[1, 2], help='Embedding frequencies')
     parser.add_argument('--visualize', action='store_true', default=True)
     
     args = parser.parse_args()

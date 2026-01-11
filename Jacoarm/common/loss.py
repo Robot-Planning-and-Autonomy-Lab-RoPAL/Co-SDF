@@ -14,20 +14,21 @@ class LossHKR:
         self.margin = margin
         self.lbda = lbda
         
-    def __call__(self, signed_fx):
+    def __call__(self, signed_fx, weights=None):
         """
         Args:
             signed_fx: signed predictions
-                       +f(x) for C_free
-                       -f(x) for C_obs
+            weights: optional importance weights for each sample
         """
-        
-        # KR term: E[- signed f(x)]
-        kr_loss = torch.mean(-signed_fx)
-        
-        # Hinge term: max(0, m - signed f(x))
-        hinge_loss = torch.mean(F.relu(self.margin - signed_fx))
-        
+        if weights is None:
+            # KR term: E[- signed f(x)]
+            kr_loss = torch.mean(-signed_fx)
+            # Hinge term: max(0, m - signed f(x))
+            hinge_loss = torch.mean(F.relu(self.margin - signed_fx))
+        else:
+            kr_loss = torch.mean(-signed_fx * weights)
+            hinge_loss = torch.mean(F.relu(self.margin - signed_fx) * weights)
+            
         return kr_loss + self.lbda * hinge_loss
     
     

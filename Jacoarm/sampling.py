@@ -19,8 +19,14 @@ def _init_oracle(model_path):
 
 def _oracle_worker(q):
     env = _GLOBAL_ENV
-    # Support any number of DOF
+    
+    # 0. Check Joint Limits first
     for i in range(len(q)):
+        if env.model.jnt_limited[i]:
+            lo, hi = env.model.jnt_range[i]
+            if q[i] < lo or q[i] > hi:
+                return -1 # Joint limit violation = Collision
+        
         env.data.qpos[i] = q[i]
     
     # Update positions and check for collisions
@@ -165,8 +171,8 @@ if __name__ == "__main__":
     os.makedirs(outdir, exist_ok=True)
     prefix = "jaco"
     
-    # 3-DOF Bounds
-    bounds = [(-np.pi, np.pi), (-np.pi, np.pi), (-np.pi, np.pi)]
+    # 3-DOF Bounds (Full periodic range)
+    bounds = [(-np.pi, np.pi)] * 3
     
     n_workers = os.cpu_count() or 4
     

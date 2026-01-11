@@ -33,7 +33,7 @@ if __name__ == "__main__":
     # model parameters
     parser.add_argument("-model","--model", choices=["ortho", "sll"], default="sll", help="Which Lipschitz architecture to consider. 'SLL' is the one used in the paper. 'Ortho' is the Bjorck orthonormalization-based architecture of Anil et al. (2019)")
     parser.add_argument("-n-layers", "--n-layers", type=int, default=20, help="number of layers in the network")
-    parser.add_argument("-n-hidden", "--n-hidden", type=int, default=128, help="size of the layers")
+    parser.add_argument("-n-hidden", "--n-hidden", type=int, default=256, help="size of the layers")
     
     # optimization parameters
     parser.add_argument("-ne", "--epochs", type=int, default=200, help="Number of training epochs")
@@ -42,6 +42,8 @@ if __name__ == "__main__":
     parser.add_argument("-lr", "--learning-rate", type=float, default=5e-4, help="Adam's learning rate")
     parser.add_argument("-lm", "--loss-margin", type=float, default=1e-2, help="margin m in the hKR loss")
     parser.add_argument("-lmbd", "--loss-lambda", type=float, default=100., help="lambda in the hKR loss")
+    parser.add_argument("--eikonal-weight", type=float, default=1e-4, help="Weight for Eikonal regularization")
+    parser.add_argument("--frequencies", type=int, nargs='+', default=[1, 2], help="Frequencies for PeriodicEmbedding")
     
     parser.add_argument("-cp", "--checkpoint-freq", type=int, default=10, help="Number of epochs between each model save")
     parser.add_argument("-cpu", action="store_true", help="force training on CPU")
@@ -60,6 +62,7 @@ if __name__ == "__main__":
         loss_regul = args.loss_lambda,
         optimizer = "adam",
         learning_rate = args.learning_rate,
+        eikonal_weight = args.eikonal_weight,
         output_folder = os.path.join("output", args.output_name if len(args.output_name)>0 else args.dataset)
     )
 
@@ -122,9 +125,9 @@ if __name__ == "__main__":
         print("Warning: test set not found, proceeding without testing.")
         test_loader = None
 
-    embedding = PeriodicEmbedding()
+    embedding = PeriodicEmbedding(frequencies=args.frequencies)
 
-    model_core = select_model(args.model, DIM * 2, args.n_layers, args.n_hidden)
+    model_core = select_model(args.model, DIM * 2 * len(args.frequencies), args.n_layers, args.n_hidden)
     model = nn.Sequential(embedding, model_core).to(config.device)
     
     model.id = model_core.id

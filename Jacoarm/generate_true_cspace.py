@@ -17,8 +17,14 @@ def _init_oracle(model_path):
 
 def _oracle_worker(q):
     env = _GLOBAL_ENV
+    # 0. Check Joint Limits first
     for i in range(len(q)):
+        if env.model.jnt_limited[i]:
+            lo, hi = env.model.jnt_range[i]
+            if q[i] < lo or q[i] > hi:
+                return 1 # Joint limit violation = Collision
         env.data.qpos[i] = q[i]
+    
     mujoco.mj_forward(env.model, env.data)
     
     is_collision = False

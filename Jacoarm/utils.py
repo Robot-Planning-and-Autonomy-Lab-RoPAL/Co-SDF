@@ -15,33 +15,29 @@ from common.models import select_model
 class PeriodicEmbedding(nn.Module):
     """
     Periodic embedding layer for angular inputs.
-    Maps each angle θ to [cos(θ), sin(θ)] to handle periodicity.
+    Maps each angle θ to [cos(k*θ), sin(k*θ)] for multiple frequencies k.
     """
-    def __init__(self):
+    def __init__(self, frequencies=[1]):
         super().__init__()
+        self.frequencies = frequencies
     
     def forward(self, x):
-        # x: (N, D) -> (N, 2D) where D is number of angles
-        return torch.cat([torch.cos(x), torch.sin(x)], dim=-1)
+        # x: (N, D) -> (N, 2*len(frequencies)*D)
+        out = []
+        for f in self.frequencies:
+            out.append(torch.cos(f * x))
+            out.append(torch.sin(f * x))
+        return torch.cat(out, dim=-1)
 
 
-def load_model(model_path, device, n_dim=3, n_layers=20, n_hidden=128, model_type="sll"):
+def load_model(model_path, device, n_dim=3, n_layers=20, n_hidden=256, model_type="sll", frequencies=[1, 2]):
     """
     Load a trained Jaco NDF model.
-    
-    Args:
-        model_path: Path to the saved model state dict
-        device: Device to load model on ('cuda' or 'cpu')
-        n_dim: Input dimension (number of joints, default 3)
-        n_layers: Number of layers in the network (default 20)
-        n_hidden: Hidden layer size (default 128)
-        model_type: Type of Lipschitz architecture ('sll' or 'ortho', default 'sll')
-    
-    Returns:
-        Loaded model in eval mode
     """
-    embedding = PeriodicEmbedding()
-    model_core = select_model(model_type, n_dim * 2, n_layers, n_hidden)
+    embedding = PeriodicEmbedding(frequencies=frequencies)
+    # The input dimension to the core model depends on frequencies
+    core_in_dim = n_dim * 2 * len(frequencies)
+    model_core = select_model(model_type, core_in_dim, n_layers, n_hidden)
     model = nn.Sequential(embedding, model_core).to(device)
     
     # Load weights
@@ -51,7 +47,7 @@ def load_model(model_path, device, n_dim=3, n_layers=20, n_hidden=128, model_typ
     else:
         state_dict = checkpoint
     
-    # Filter out metadata keys like "id" or "meta" that are not in the model
+    # Filter out metadata keys
     model_keys = set(model.state_dict().keys())
     state_dict = {k: v for k, v in state_dict.items() if k in model_keys}
     

@@ -31,10 +31,10 @@
 
   <default>
     <geom contype='1' conaffinity='1' condim='3' margin="0.001" />
-    <joint limited="false" damping="5.0" armature=".1"/>
+    <joint limited="true" damping="5.0" armature=".1"/>
     <default class ="vizNcoll">
       <geom material="MatViz" type="mesh" condim="3" contype="1" conaffinity="1" margin="0.001"/>
-      <joint pos="0 0 0" type="hinge"/>
+      <joint pos="0 0 0" type="hinge" range="-3.141 3.141"/>
     </default>
     <default class ="ground">
       <geom type="plane" margin="0.001" contype="1" />
@@ -56,17 +56,17 @@
 
       <!-- Arm Joint 1: Base Rotation -->
       <body name="jaco_link_1" childclass="vizNcoll" pos="0 0 0.1535" quat="0 0 1 0">
-        <joint name="jaco_joint_1" axis="0 0 -1" />
+        <joint name="jaco_joint_1" axis="0 0 -1" limited="true" range="-3.141 3.141" />
         <geom mesh="jaco_link_1"/>
 
         <!-- Arm Joint 2: Shoulder Pitch -->
         <body name="jaco_link_2" pos="0 0 -0.1185" quat="0 0 0.707107 0.707107">
-          <joint name="jaco_joint_2" axis="0 0 1" />
+          <joint name="jaco_joint_2" axis="0 0 1" limited="true" range="-2.409 2.409"/>
           <geom mesh="jaco_link_2"/>
 
           <!-- Arm Joint 3: Elbow Pitch -->
           <body name="jaco_link_3" pos="0.41 0 0" quat="0 0.707107 0.707107 0">
-            <joint name="jaco_joint_3" axis="0 0 -1" />
+            <joint name="jaco_joint_3" axis="0 0 -1" limited="true" range="-2.845 2.845"/>
             <geom mesh="jaco_link_3"/>
 
             <!-- FIXED: Joint 4 removed -->
@@ -105,8 +105,8 @@
   </worldbody>
 
   <actuator>
-    <position joint='jaco_joint_1' name='pos_j1' kp="500" kv="50" ctrlrange='-6.28 6.28' ctrllimited="true"/>
-    <position joint='jaco_joint_2' name='pos_j2' kp="500" kv="50" ctrlrange='-6.28 6.28' ctrllimited="true"/>
-    <position joint='jaco_joint_3' name='pos_j3' kp="500" kv="50" ctrlrange='-6.28 6.28' ctrllimited="true"/>
+    <position joint='jaco_joint_1' name='pos_j1' kp="500" kv="50" ctrlrange='-3.141 3.141' ctrllimited="true"/>
+    <position joint='jaco_joint_2' name='pos_j2' kp="500" kv="50" ctrlrange='-2.409 2.409' ctrllimited="true"/>
+    <position joint='jaco_joint_3' name='pos_j3' kp="500" kv="50" ctrlrange='-2.845 2.845' ctrllimited="true"/>
   </actuator>
 </mujoco>

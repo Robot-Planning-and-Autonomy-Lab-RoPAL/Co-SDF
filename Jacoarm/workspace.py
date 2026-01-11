@@ -9,6 +9,9 @@ if __name__ == "__main__":
 
     env = JacoEnv(width=800, height=800, model_path="jaco_3dof.xml")
     
+    # Set the configuration to the one in question
+    q_test = [-2, 1, -2]
+    env.data.qpos[:3] = q_test
     mujoco.mj_forward(env.model, env.data)
 
     try:
