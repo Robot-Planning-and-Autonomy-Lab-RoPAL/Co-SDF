@@ -249,9 +249,14 @@ def evaluate(args, device):
         Y_pred[preds < 0] = -1
         acc = (Y_pred == Y_gt).mean()
         
-        intersection = np.logical_and(Y_pred == -1, Y_gt == -1).sum()
-        union = np.logical_or(Y_pred == -1, Y_gt == -1).sum()
-        iou = intersection / union if union > 0 else 1.0
+        tp = np.logical_and(Y_pred == -1, Y_gt == -1).sum()
+        tn = np.logical_and(Y_pred == 1,  Y_gt == 1).sum()
+        fp = np.logical_and(Y_pred == -1, Y_gt == 1).sum()
+        fn = np.logical_and(Y_pred == 1,  Y_gt == -1).sum()
+
+        iou = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 1.0
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0
         
         # 2. Boundary Accuracy & Chamfer
         X_bound, Y_b_gt, X_surf_gt = generate_boundary_test_set(args.n_samples//2, bounds, 0.01, pool)
@@ -269,6 +274,8 @@ def evaluate(args, device):
         print("="*35)
         print(f"Global Accuracy:   {acc*100:.2f}%")
         print(f"Global IoU:        {iou:.4f}")
+        print(f"FPR (Conservative): {fpr*100:.2f}%")
+        print(f"FNR (Dangerous):    {fnr*100:.2f}%")
         print(f"Boundary Accuracy: {acc_b*100:.2f}%")
         print(f"Chamfer-L2:        {chamfer:.8f}")
         print("="*35)

@@ -5,6 +5,7 @@ import argparse
 import numpy as np
 import mujoco
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 from tqdm import tqdm
 from multiprocessing import Pool
 from jaco_arm.jaco import JacoEnv
@@ -218,5 +219,40 @@ if __name__ == "__main__":
 
         plt.savefig(out_path, dpi=300, bbox_inches='tight')
         plt.close()
+        print(f"Static visualization saved to {out_path}")
+
+        # --- Plotly Interactive Visualization ---
+        fig = go.Figure()
+        
+        if len(X_in) > 0:
+            fig.add_trace(go.Scatter3d(
+                x=X_in[:, 0], y=X_in[:, 1], z=X_in[:, 2],
+                mode='markers',
+                marker=dict(size=2, color='red', opacity=0.8),
+                name='Collision'
+            ))
+        
+        if len(X_out) > 0:
+            fig.add_trace(go.Scatter3d(
+                x=X_out[:, 0], y=X_out[:, 1], z=X_out[:, 2],
+                mode='markers',
+                marker=dict(size=2, color='blue', opacity=0.8),
+                name='Free'
+            ))
+
+        fig.update_layout(
+            title=f"Configuration Space Samples (n={args.n_train})",
+            scene=dict(
+                xaxis=dict(title='theta1', tickvals=[-np.pi, -np.pi/2, 0, np.pi/2, np.pi], ticktext=['-pi', '-pi/2', '0', 'pi/2', 'pi']),
+                yaxis=dict(title='theta2', tickvals=[-np.pi, -np.pi/2, 0, np.pi/2, np.pi], ticktext=['-pi', '-pi/2', '0', 'pi/2', 'pi']),
+                zaxis=dict(title='theta3', tickvals=[-np.pi, -np.pi/2, 0, np.pi/2, np.pi], ticktext=['-pi', '-pi/2', '0', 'pi/2', 'pi']),
+                aspectmode='cube'
+            ),
+            margin=dict(l=0, r=0, b=0, t=40)
+        )
+
+        html_out_path = os.path.join(outdir, f"{prefix}_cspace_{args.n_train}_samples.html")
+        fig.write_html(html_out_path)
+        print(f"Interactive visualization saved to {html_out_path}")
     
     print(f"\nAll data saved to {outdir}")

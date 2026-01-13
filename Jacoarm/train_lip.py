@@ -125,13 +125,15 @@ if __name__ == "__main__":
         print("Warning: test set not found, proceeding without testing.")
         test_loader = None
 
-    embedding = PeriodicEmbedding(frequencies=args.frequencies)
-
-    model_core = select_model(args.model, DIM * 2 * len(args.frequencies), args.n_layers, args.n_hidden)
-    model = nn.Sequential(embedding, model_core).to(config.device)
-    
-    model.id = model_core.id
-    model.meta = model_core.meta
+    if len(args.frequencies) == 0 or (len(args.frequencies) == 1 and args.frequencies[0] == 0):
+        print("Using RAW coordinates (no PeriodicEmbedding)")
+        model = select_model(args.model, DIM, args.n_layers, args.n_hidden).to(config.device)
+    else:
+        embedding = PeriodicEmbedding(frequencies=args.frequencies)
+        model_core = select_model(args.model, DIM * 2 * len(args.frequencies), args.n_layers, args.n_hidden)
+        model = nn.Sequential(embedding, model_core).to(config.device)
+        model.id = model_core.id
+        model.meta = model_core.meta
 
     if args.resume:
         try:
