@@ -62,6 +62,7 @@ class Trainer(M.Logger):
                 cb.callOnBeginTrain(self, model)
             t0 = time.time()
             lossfun_hkr = LossHKR(self.config.loss_margin, self.config.loss_regul)
+            lossfun_eik = EikonalLoss()
             train_loss = dict()
             train_loss["hkr"] = 0.
             train_length = len(self.train_loaders[0])
@@ -85,12 +86,7 @@ class Trainer(M.Logger):
                 
                 # Eikonal Regularization
                 if hasattr(self.config, "eikonal_weight") and self.config.eikonal_weight > 0:
-                    # Calculate gradients on boundary/straddling points
-                    # (Here we use both in/out points for simplicity)
-                    grad_in = torch.autograd.grad(Y_in, points_in, grad_outputs=torch.ones_like(Y_in), create_graph=True)[0]
-                    grad_out = torch.autograd.grad(Y_out, points_out, grad_outputs=torch.ones_like(Y_out), create_graph=True)[0]
-                    
-                    eik_loss = ( (grad_in.norm(dim=-1) - 1)**2 + (grad_out.norm(dim=-1) - 1)**2 ).mean()
+                    eik_loss = (lossfun_eik(Y_in, points_in) + lossfun_eik(Y_out, points_out)) / 2
                     total_batch_loss += self.config.eikonal_weight * eik_loss
                     if "eik" not in train_loss: train_loss["eik"] = 0.
                     train_loss["eik"] += float(eik_loss.detach())
@@ -150,6 +146,7 @@ class Trainer(M.Logger):
             if self.config.eikonal_weight >0. :
                 train_loss["eik"] = 0.
                 
+            lossfun_eik = EikonalLoss()
             for (x,y_target) in tqdm(self.train_loaders, total=len(self.train_loaders)):
                 self.optimizer.zero_grad() # zero the parameter gradients
                 # forward + backward + optimize
@@ -167,10 +164,8 @@ class Trainer(M.Logger):
                     x_rdm = 2*torch.rand_like(x)-1 # between -1 and 1
                     x_rdm.requires_grad = True
                     y_rdm = model(x_rdm)
-                    batch_grad = torch.autograd.grad(y_rdm, x_rdm, grad_outputs=torch.ones_like(y_rdm), create_graph=True)[0]
-                    # batch_loss_eik = self.config.eikonal_weight * F.mse_loss(torch.sum(batch_grad*batch_grad, axis=-1), ones)
-                    batch_grad_norm = batch_grad.norm(dim=-1)
-                    batch_loss_eik = self.config.eikonal_weight * F.mse_loss(batch_grad_norm, torch.ones_like(batch_grad_norm))
+                    
+                    batch_loss_eik = self.config.eikonal_weight * lossfun_eik(y_rdm, x_rdm)
                     total_batch_loss += batch_loss_eik
                     train_loss["eik"] += float(batch_loss_eik.detach())
 

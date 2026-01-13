@@ -67,3 +67,34 @@ class SALDLoss:
 
     def __call__(self,y_pred,y_target):
         return torch.min( torch.norm(y_pred-y_target), torch.norm(y_pred+y_target))
+
+class EikonalLoss:
+    """
+    Eikonal Regularization: enforces |grad f(x)| = 1
+    Used for stabilizing Distance Field learning.
+    """
+    def __init__(self):
+        pass
+
+    def __call__(self, y, x):
+        """
+        Calculates Eikonal loss: mean((|grad_x y| - 1)**2)
+        
+        Args:
+            y: model output (requires grad)
+            x: model input (requires grad)
+        """
+        # Calculate gradients
+        grad = torch.autograd.grad(
+            outputs=y,
+            inputs=x,
+            grad_outputs=torch.ones_like(y),
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True
+        )[0]
+        
+        # Compute loss: (|grad| - 1)^2
+        grad_norm = grad.norm(dim=-1)
+        loss = torch.mean((grad_norm - 1)**2)
+        return loss
