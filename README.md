@@ -75,20 +75,3 @@ python ndf_optimizer.py --path output/traj/rrt_path.npy --model output/bookshelf
 ```
 
 ---
-
-## Technical Details
-
-### Periodic Embedding
-Joint angles $\theta \in [-\pi, \pi]$ are embedded using:
-$$PE(\theta) = [\cos(k_1\theta), \sin(k_1\theta), \dots, \cos(k_L\theta), \sin(k_L\theta)]$$
-Typical frequencies $k \in \{1, 2, 4, 8\}$.
-
-### Eikonal Loss
-Maintains $|\nabla f(\mathbf{q})| \approx 1$ to ensure the learned field behaves like a true distance function.
-
----
-
-## Visualization
-Training progress and optimized trajectories (GIFs) are saved in the respective `output/` directories.
-- `log.csv`: Training metrics.
-- `opt_front.gif`: Optimized trajectory visualization.
