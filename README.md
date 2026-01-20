@@ -75,3 +75,17 @@ python ndf_optimizer.py --path output/traj/rrt_path.npy --model output/bookshelf
 ```
 
 ---
+
+## Visualization & Demos
+
+### Trajectory Optimization (Franka FR3)
+Initial RRT paths are often jerky and close to obstacles. NDF-based optimization smooths the path while maintaining safety.
+
+| RRT Path (Initial) | Optimized Path (NDF) |
+| :---: | :---: |
+| ![RRT Front](fig/rtt_front.gif) <br> Front View | ![Opt Front](fig/opt_front.gif) <br> Front View |
+| ![RRT Side](fig/rtt_side.gif) <br> Side View | ![Opt Side](fig/opt_side.gif) <br> Side View |
+
+Training metrics and logs are saved in:
+- `log.csv`: Training metrics (loss, Eikonal term).
+- `output/visu/`: Generated GIFs and visualizations.
