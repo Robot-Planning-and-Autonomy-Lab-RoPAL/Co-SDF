@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 import os
+# Handle High-DPI displays and UI font scale
+os.environ['GDK_SCALE'] = '1'
+os.environ['GDK_DPI_SCALE'] = '1'
+os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
+os.environ['MUJOCO_FONT_SCALE'] = '150' # Controls font size in left/right UI panels
 import time
 import threading
 import numpy as np

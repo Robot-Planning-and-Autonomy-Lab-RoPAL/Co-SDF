@@ -8,3 +8,5 @@ torch
 deel-torchlip
 mouette==1.2.2
 scikit-image
+mujoco
+imageio

@@ -1,6 +1,15 @@
 # Neural-Distance-Fields-for-Configuration-Space-Shape-Modeling
 
-This repository provides tools for modeling Configuration Space (C-space) shapes using 1-Lipschitz Neural Distance Fields (NDFs). It includes scripts for data extraction, model training, and visualization, specifically demonstrated on a 2D arm configuration space.
+This repository provides tools for modeling Configuration Space (C-space) shapes using 1-Lipschitz Neural Distance Fields (NDFs). It supports 2D arms, 3-DOF Jaco arms, and 7-DOF Franka FR3 arms, featuring advanced training techniques and NDF-based trajectory optimization.
+
+## Key Features
+
+- **Multi-scale Periodic Embedding**: Handles joint angle periodicity and captures high-frequency C-space boundary details.
+- **Eikonal Regularization**: Enforces unit gradient length for more accurate and physically consistent distance fields.
+- **Support for High-DOF Robots**: Scalable architecture for 3-DOF (Jaco) and 7-DOF (Franka FR3) arm configuration spaces.
+- **NDF-based Trajectory Optimization**: Gradient-based path smoothing and collision avoidance using learned distance fields.
+
+---
 
 ## Installation
 
@@ -10,55 +19,76 @@ To install the necessary dependencies, run:
 pip install -r requirements.txt
 ```
 
+---
+
 ## Project Structure
 
-- `2Dexample/`: Contains the core scripts and configurations for the 2D arm environment.
-  - `extract_dataset_pointcloud.py`: Script to generate C-space datasets.
-  - `train_lip.py`: Script to train the 1-Lipschitz NDF model.
-  - `config/`: Configuration files for the world environment.
-  - `common/`: Shared utilities for models, training, and visualization.
+- `2Dexample/`: Core scripts for the 2D arm environment.
+- `Jacoarm/`: Implementation for the 3-DOF Jaco robot arm.
+- `franka_fr3/`: Implementation for the 7-DOF Franka FR3 arm, including RRT planning and NDF optimization.
 - `requirements.txt`: Python dependencies.
 
-## Data Extraction
+---
 
-Before training, you need to generate a C-space dataset. The `extract_dataset_pointcloud.py` script performs Gaussian sampling near the boundaries of the configuration space to create a point cloud dataset.
+## Quick Start (2D Example)
 
-To generate the dataset:
-
+### Data Extraction
 ```bash
 cd 2Dexample
 python extract_dataset_pointcloud.py --world config/block_world.yaml --n-train 5000 --n-test 1000 --near-ratio 0.7
 ```
 
-- This will create an `inputs/` directory (by default) containing `.npy` files for training and testing.
-- It also generates a visualization of the sampled points: `inputs/block_world_cspace_5000_samples.png`.
-
-## Training the Model
-
-Once the dataset is generated, you can train the 1-Lipschitz NDF model using `train_lip.py`.
-
-### Running the Training Script
-
+### Training
 ```bash
-cd 2Dexample
-python train_lip.py --dataset block_world --data inputs -o block_world_cspace_demo -model sll -n-layers 20 -n-hidden 128 -ne 200 -bs 200
+python train_lip.py --dataset block_world --data inputs -o result -model sll -n-layers 20 -n-hidden 128 -ne 200 -bs 200
 ```
 
-### Explanation of Command Arguments:
+---
 
-- `--dataset block_world`: The prefix of the dataset files to load (e.g., `block_world_Xtrain_in.npy`).
-- `--data inputs`: The directory where the generated dataset files are located.
-- `-o block_world_cspace_demo`: The name of the output folder within `output/` where checkpoints and results will be saved.
-- `-model sll`: Specifies the 1-Lipschitz architecture (SLL model).
-- `-n-layers 20`: Number of layers in the network.
-- `-n-hidden 128`: Hidden layer width.
-- `-ne 200`: Number of training epochs.
-- `-bs 200`: Training batch size.
+## Franka FR3 (7-DOF) Pipeline
 
-## Visualization and Results
+The `franka_fr3` directory provides a complete pipeline from sampling to optimized trajectory execution.
 
-Training progress and results are saved in the `2Dexample/output/<output-name>/` directory:
+### 1. Data Generation
+Generate a point cloud dataset of the C-space for a specific scene (e.g., a bookshelf).
+```bash
+cd franka_fr3
+python data_generator.py --model scenes/bookshelf.xml --n-points 50000 --near-ratio 0.8
+```
+
+### 2. Training NDF
+Train a 1-Lipschitz NDF using Eikonal regularization and periodic embedding.
+```bash
+python train_lip.py --dataset bookshelf --data inputs -o bookshelf_ndf -model sll -n-layers 20 -n-hidden 512
+```
+
+### 3. RRT Planning
+Find an initial collision-free path using MuJoCo-based RRT.
+```bash
+python rrt.py --scene scenes/bookshelf.xml --path output/traj/rrt_path.npy
+```
+
+### 4. Trajectory Optimization
+Optimize the RRT path using the trained NDF to improve smoothness and safety.
+```bash
+python ndf_optimizer.py --path output/traj/rrt_path.npy --model output/bookshelf_ndf/model_final.pt --scene scenes/bookshelf.xml
+```
+
+---
+
+## Technical Details
+
+### Periodic Embedding
+Joint angles $\theta \in [-\pi, \pi]$ are embedded using:
+$$PE(\theta) = [\cos(k_1\theta), \sin(k_1\theta), \dots, \cos(k_L\theta), \sin(k_L\theta)]$$
+Typical frequencies $k \in \{1, 2, 4, 8\}$.
+
+### Eikonal Loss
+Maintains $|\nabla f(\mathbf{q})| \approx 1$ to ensure the learned field behaves like a true distance function.
+
+---
+
+## Visualization
+Training progress and optimized trajectories (GIFs) are saved in the respective `output/` directories.
 - `log.csv`: Training metrics.
-- `pc_0.geogram_ascii`: Initial point cloud visualization.
-- `model_final.pt`: The trained model weights.
-- Visualization images (if enabled) showing the NDF boundary during training.
+- `opt_front.gif`: Optimized trajectory visualization.

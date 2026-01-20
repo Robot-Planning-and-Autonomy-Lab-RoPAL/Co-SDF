@@ -8,7 +8,10 @@
   <option integrator="implicitfast" solver="Newton" timestep="0.002" gravity="0 0 0" iterations="100"/>
 
   <visual>
-    <global offwidth="800" offheight="800"/>
+    <global offwidth="1920" offheight="1080" elevation="-30" azimuth="120"/>
+    <quality shadowsize="4096" offsamples="16"/>
+    <headlight ambient=".4 .4 .4" diffuse=".8 .8 .8" specular="0.1 0.1 0.1"/>
+    <map fogstart="3" fogend="10"/>
   </visual>
 
   <asset>
@@ -23,8 +26,8 @@
     <mesh file="jaco_link_finger_2.stl"/>
     <mesh file="jaco_link_finger_3.stl"/>
 
-    <texture type="skybox" builtin="gradient" rgb1=".3 .5 .7" rgb2="1 1 1" width="512" height="512"/>
-    <texture name="groundplane" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 .2 .3" width="512" height="512" mark="edge" markrgb=".8 .8 .8"/>
+    <texture type="skybox" builtin="gradient" rgb1=".3 .5 .7" rgb2="1 1 1" width="2048" height="2048"/>
+    <texture name="groundplane" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 .2 .3" width="2048" height="2048" mark="edge" markrgb=".8 .8 .8"/>
     <material name="MatViz" specular="1" shininess=".3" reflectance="0.5" rgba=".1 .1 .1 1"/>
     <material name="MatGnd" texture="groundplane" texrepeat="5 5" specular="1" shininess=".3" reflectance="0.2"/>
   </asset>
