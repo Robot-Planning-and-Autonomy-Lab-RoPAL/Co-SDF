@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-
+import math
 import numpy as np
 import scipy.ndimage as ndi
 from scipy.interpolate import RegularGridInterpolator
-
-# =========================================================
-# C-space (θ1, θ2) → C-obs 的 Signed Distance Field (SDF)
-# =========================================================
 
 def _point_to_seg_dist(px, py, ax, ay, bx, by):
 	vx, vy = bx-ax, by-ay
@@ -53,22 +49,17 @@ def cobs_sdf_on_torus(theta, c_space):
 	dth1 = float(t1[1]-t1[0]); dth2 = float(t2[1]-t2[0])
 	H, W  = obs.shape
 	
-	# 3x3 平铺实现周期边界
 	obs_t   = np.tile(obs, (3, 3))
 	d_out_t = ndi.distance_transform_edt(~obs_t, sampling=(dth1, dth2))
 	d_in_t  = ndi.distance_transform_edt( obs_t, sampling=(dth1, dth2))
 	sdf_t   = d_out_t - d_in_t
 	
-	# 取中心块
 	sdf = sdf_t[H:2*H, W:2*W]
 	
 	return (t1, t2), sdf
 
 def wrap_samples_to_period(samples, theta):
-	"""
-	把 (θ1, θ2) 的样本点 wrap 回 [tmin, tmax) 区间。
-	例如如果 tmin=0, tmax=2π，那么所有角度都归一化到 [0, 2π)。
-	"""
+
 	t1, t2 = theta
 	out = samples.copy()
 	out[:,0] = (out[:,0]-t1[0]) % (t1[-1]-t1[0]) + t1[0]
@@ -76,7 +67,7 @@ def wrap_samples_to_period(samples, theta):
 	return out
 
 def cspace_sdf_at_samples(theta, sdf_grid, samples_wrapped):
-	"""在样本点上双线性插值读取 C-space SDF（弧度）"""
+
 	t1, t2 = theta
 	interp = RegularGridInterpolator((t1, t2), sdf_grid,
 									bounds_error=False, fill_value=None)

@@ -64,6 +64,8 @@ class Trainer(M.Logger):
             lossfun_hkr = LossHKR(self.config.loss_margin, self.config.loss_regul)
             train_loss = dict()
             train_loss["hkr"] = 0.
+            if hasattr(self.config, "eikonal_weight") and self.config.eikonal_weight > 0.:
+                train_loss["eik"] = 0.
             train_length = len(self.train_loaders[0])
             for (X_in, X_out) in tqdm(zip(*self.train_loaders), total=train_length):
                 if X_in[0].shape != X_out[0].shape: continue
@@ -73,6 +75,19 @@ class Trainer(M.Logger):
                 Y_out = model(X_out[0])
                 batch_loss_hkr = torch.sum(lossfun_hkr(-Y_in) + lossfun_hkr(Y_out))
                 total_batch_loss = batch_loss_hkr
+
+                # Optional: Eikonal loss on configuration variables (first 2 dims)
+                if hasattr(self.config, "eikonal_weight") and self.config.eikonal_weight > 0.:
+                    X_mix = torch.cat([X_in[0], X_out[0]], dim=0)
+                    X_mix.requires_grad = True
+                    Y_mix = model(X_mix)
+                    grad = torch.autograd.grad(Y_mix, X_mix, grad_outputs=torch.ones_like(Y_mix), create_graph=True)[0]
+                    grad_q = grad[:, :2]
+                    grad_norm = grad_q.norm(dim=-1)
+                    batch_loss_eik = self.config.eikonal_weight * F.mse_loss(grad_norm, torch.ones_like(grad_norm))
+                    total_batch_loss += batch_loss_eik
+                    train_loss["eik"] += float(batch_loss_eik.detach())
+
                 total_batch_loss.backward() # call back propagation
                 train_loss["hkr"] += float(batch_loss_hkr.detach())
                 self.optimizer.step() 

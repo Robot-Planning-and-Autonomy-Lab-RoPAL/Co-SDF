@@ -94,16 +94,19 @@ class Render2DCB(Callback):
             render_path = os.path.join(self.save_folder, f"render_{epoch}.png")
             contour_path = os.path.join(self.save_folder, f"contour_{epoch}.png") if self.output_contours else None
             gradient_path = os.path.join(self.save_folder, f"grad_{epoch}.png") if self.output_gradient_norm else None
-            render_sdf_2d(
-                render_path,
-                contour_path,
-                gradient_path,
-                model, 
-                self.domain, 
-                trainer.config.device, 
-                res=self.res, 
-                batch_size=trainer.config.test_batch_size,
-            )
+            try:
+                render_sdf_2d(
+                    render_path,
+                    contour_path,
+                    gradient_path,
+                    model, 
+                    self.domain, 
+                    trainer.config.device, 
+                    res=self.res, 
+                    batch_size=trainer.config.test_batch_size,
+                )
+            except Exception as e:
+                print(f"[Render2DCB] WARNING: Rendering failed at epoch {epoch}: {e}")
 
 class MarchingCubeCB(Callback):
     def __init__(self, save_folder, freq, domain, res=100, iso=0):

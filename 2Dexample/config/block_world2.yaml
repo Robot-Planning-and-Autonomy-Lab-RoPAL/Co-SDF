@@ -1,0 +1,32 @@
+robot:
+  parameters:
+    base_position:
+    - 5.0
+    - 5.0
+    link_lengths:
+    - 2.1
+    - 2.1
+  type: RobotArm2D
+workspace:
+  parameters:
+    limits:
+    - - 0.0
+      - 10.0
+    - - 0.0
+      - 10.0
+    obstacles:
+    - parameters:
+        xlim:
+        - 6.823292212984942
+        - 7.4420866769932905
+        ylim:
+        - 4.114150656041032
+        - 6.520826414931935
+      type: Rectangle
+    - parameters:
+        center:
+        - 4.092896121634134
+        - 3.870114948336899
+        radius: 0.78788808382299655
+      type: Circle
+  type: Workspace2D
