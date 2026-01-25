@@ -82,11 +82,11 @@ class Trainer(M.Logger):
                         batch = next(iters[i])
                     batches.append(batch)
                 
-                X_in_batch, X_out_batch = batches # Now batches contain (points, weights)
+                X_in_batch, X_out_batch = batches
                 self.optimizer.zero_grad()
                 
-                points_in, weights_in = X_in_batch
-                points_out, weights_out = X_out_batch
+                points_in = X_in_batch[0]
+                points_out = X_out_batch[0]
                 
                 # Enable grad for Eikonal
                 if hasattr(self.config, "eikonal_weight") and self.config.eikonal_weight > 0:
@@ -96,14 +96,12 @@ class Trainer(M.Logger):
                 Y_in = model(points_in)
                 Y_out = model(points_out)
                 
-                # Use importance weights in HKR loss
-                batch_loss_hkr = torch.sum(lossfun_hkr(-Y_in, weights=weights_in) + 
-                                          lossfun_hkr(Y_out, weights=weights_out))
+                # Standard HKR loss (no weights)
+                batch_loss_hkr = torch.sum(lossfun_hkr(-Y_in) + lossfun_hkr(Y_out))
                 total_batch_loss = batch_loss_hkr
                 
-                # Eikonal Regularization (weighted mean based on importance weights)
+                # Eikonal Regularization
                 if hasattr(self.config, "eikonal_weight") and self.config.eikonal_weight > 0:
-                    # We can use weights to prioritize eikonal consistency near boundary too
                     eik_in = lossfun_eik(Y_in, points_in)
                     eik_out = lossfun_eik(Y_out, points_out)
                     eik_loss = (eik_in + eik_out) / 2

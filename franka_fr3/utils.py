@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Utility functions for Jaco Arm NDF
+Utility functions for Franka FR3 NDF
 """
 import os
 import sys
@@ -12,33 +12,17 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '2Dexample'))
 from common.models import select_model
 
 
-class PeriodicEmbedding(nn.Module):
+def load_model(model_path, device, n_dim=7, n_layers=20, n_hidden=256, model_type="sll", n_points_per_link=2):
     """
-    Periodic embedding layer for angular inputs.
-    Maps each angle θ to [cos(k*θ), sin(k*θ)] for multiple frequencies k.
+    Load a trained Franka FR3 NDF model.
     """
-    def __init__(self, frequencies=[1]):
-        super().__init__()
-        self.frequencies = frequencies
-    
-    def forward(self, x):
-        # x: (N, D) -> (N, 2*len(frequencies)*D)
-        out = []
-        for f in self.frequencies:
-            out.append(torch.cos(f * x))
-            out.append(torch.sin(f * x))
-        return torch.cat(out, dim=-1)
-
-
-def load_model(model_path, device, n_dim=3, n_layers=20, n_hidden=256, model_type="sll", frequencies=[1, 2]):
-    """
-    Load a trained Jaco NDF model.
-    """
-    embedding = PeriodicEmbedding(frequencies=frequencies)
-    # The input dimension to the core model depends on frequencies
-    core_in_dim = n_dim * 2 * len(frequencies)
-    model_core = select_model(model_type, core_in_dim, n_layers, n_hidden)
-    model = nn.Sequential(embedding, model_core).to(device)
+    if model_type.lower() == "gndf":
+        from common.models.gndf import G_NDF
+        model = G_NDF(n_layers=n_layers, n_hidden=n_hidden, 
+                      n_points_per_link=n_points_per_link, device=device).to(device)
+    else:
+        # Standard SLL model
+        model = select_model(model_type, n_dim, n_layers, n_hidden).to(device)
     
     # Load weights
     checkpoint = torch.load(model_path, map_location=device)
@@ -60,3 +44,4 @@ def load_model(model_path, device, n_dim=3, n_layers=20, n_hidden=256, model_typ
 def count_parameters(model):
     """Count the number of trainable parameters in a model."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+

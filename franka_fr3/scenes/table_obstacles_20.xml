@@ -1,0 +1,61 @@
+<mujoco model="fr3_table_scene">
+  <compiler meshdir="../assets"/>
+  <include file="../models/fr3.xml"/>
+
+  <statistic center="0.2 0 0.4" extent=".8"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="120" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    <material name="table_mat" rgba="0.5 0.4 0.3 1" reflectance="0.1"/>
+    <material name="obstacle_mat" rgba="0.9 0.1 0.1 1" reflectance="0.5"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+    <geom name="floor" size="0 0 0.05" type="plane" pos="0 0 -0.8" material="groundplane"/>
+
+    <!-- Large Table for robot and obstacles (robot at 0,0,0) -->
+    <!-- Robot sits at z=0. Table top is at z=0. 
+         Table box center at z=-0.02 (thickness 0.04). -->
+    <geom name="table_surface" type="box" size="0.6 0.8 0.02" pos="0.3 0 -0.02" material="table_mat"/>
+    
+    <!-- Legs for visuals 
+         Table bottom at -0.04. Floor at -0.8. 
+         Leg height = 0.76. Half-height = 0.38.
+         Leg center z = (-0.04 + -0.8) / 2 = -0.42. -->
+    <geom name="table_leg1" type="cylinder" size="0.04 0.38" pos="-0.25 -0.75 -0.42" rgba="0.4 0.3 0.2 1"/>
+    <geom name="table_leg2" type="cylinder" size="0.04 0.38" pos="0.85 -0.75 -0.42" rgba="0.4 0.3 0.2 1"/>
+    <geom name="table_leg3" type="cylinder" size="0.04 0.38" pos="-0.25 0.75 -0.42" rgba="0.4 0.3 0.2 1"/>
+    <geom name="table_leg4" type="cylinder" size="0.04 0.38" pos="0.85 0.75 -0.42" rgba="0.4 0.3 0.2 1"/>
+
+    <geom name="obs_0" type="cylinder" size="0.021 0.054" pos="0.705 -0.160 0.054" rgba="0.64 0.40 0.58 1.00"/>
+    <geom name="obs_1" type="box" size="0.027 0.027 0.049" pos="0.219 -0.583 0.049" rgba="0.90 0.71 0.71 1.00"/>
+    <geom name="obs_2" type="box" size="0.032 0.026 0.049" pos="0.173 -0.374 0.049" rgba="0.82 0.82 0.87 1.00"/>
+    <geom name="obs_3" type="box" size="0.038 0.050 0.032" pos="0.369 0.083 0.032" rgba="0.47 0.41 0.21 1.00"/>
+    <geom name="obs_4" type="sphere" size="0.044" pos="0.409 -0.635 0.044" rgba="0.50 0.29 0.28 1.00"/>
+    <geom name="obs_5" type="sphere" size="0.058" pos="0.511 -0.332 0.058" rgba="0.71 0.33 0.40 1.00"/>
+    <geom name="obs_6" type="cylinder" size="0.029 0.056" pos="0.385 -0.308 0.056" rgba="0.76 0.70 0.79 1.00"/>
+    <geom name="obs_7" type="sphere" size="0.041" pos="0.220 0.413 0.041" rgba="0.74 0.61 0.82 1.00"/>
+    <geom name="obs_8" type="box" size="0.040 0.021 0.044" pos="0.553 -0.306 0.044" rgba="0.57 0.34 0.33 1.00"/>
+    <geom name="obs_9" type="cylinder" size="0.043 0.057" pos="0.494 -0.542 0.057" rgba="0.40 0.56 0.56 1.00"/>
+    <geom name="obs_10" type="box" size="0.021 0.042 0.028" pos="0.437 0.615 0.028" rgba="0.44 0.44 0.66 1.00"/>
+    <geom name="obs_11" type="box" size="0.044 0.032 0.049" pos="0.411 0.508 0.049" rgba="0.85 0.56 0.72 1.00"/>
+    <geom name="obs_12" type="box" size="0.024 0.030 0.048" pos="0.417 -0.682 0.048" rgba="0.84 0.22 0.29 1.00"/>
+    <geom name="obs_13" type="sphere" size="0.056" pos="0.712 -0.035 0.056" rgba="0.33 0.67 0.71 1.00"/>
+    <geom name="obs_14" type="cylinder" size="0.040 0.078" pos="0.152 0.291 0.078" rgba="0.33 0.24 0.82 1.00"/>
+    <geom name="obs_15" type="box" size="0.024 0.038 0.049" pos="0.477 -0.016 0.049" rgba="0.62 0.84 0.26 1.00"/>
+    <geom name="obs_16" type="box" size="0.026 0.046 0.047" pos="0.246 -0.219 0.047" rgba="0.61 0.28 0.34 1.00"/>
+    <geom name="obs_17" type="box" size="0.033 0.040 0.033" pos="0.370 -0.277 0.033" rgba="0.89 0.63 0.40 1.00"/>
+    <geom name="obs_18" type="sphere" size="0.037" pos="0.701 0.014 0.037" rgba="0.21 0.75 0.57 1.00"/>
+    <geom name="obs_19" type="sphere" size="0.040" pos="0.322 -0.200 0.040" rgba="0.84 0.60 0.71 1.00"/>
+  </worldbody>
+</mujoco>
