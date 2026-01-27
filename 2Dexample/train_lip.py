@@ -26,9 +26,9 @@ if __name__ == "__main__":
     )
     
     # dataset parameters
-    parser.add_argument("--dataset", type=str, default="block_world5", help="prefix of dataset files, e.g. 'block_world'")
-    parser.add_argument("--data", type=str, default="inputs/block_world5", help="directory where the dataset npy/npz files are stored")    
-    parser.add_argument("--output-name", type=str, default="block_world5", help="custom output folder name")
+    parser.add_argument("--dataset", type=str, default="block_world20", help="prefix of dataset files, e.g. 'block_world'")
+    parser.add_argument("--data", type=str, default="inputs/block_world20", help="directory where the dataset npy/npz files are stored")    
+    parser.add_argument("--output-name", type=str, default="block_world20", help="custom output folder name")
     parser.add_argument("--unsigned", action="store_true", help="flag for training an unsigned distance field instead of a signed one")
     parser.add_argument("--n-hidden", type=int, default=256, help="size of the layers")
     parser.add_argument("--n-layers", type=int, default=20, help="number of layers in the network")

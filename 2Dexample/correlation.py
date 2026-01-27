@@ -32,8 +32,8 @@ def get_device():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-path', default='output/block_world5/model_final.pt', help="Path to the NDF model")
-    parser.add_argument('--world-file', default='config/block_world5.yaml', help="World YAML file")
+    parser.add_argument('--model-path', default='output/block_world20/model_final.pt', help="Path to the NDF model")
+    parser.add_argument('--world-file', default='config/block_world20.yaml', help="World YAML file")
     parser.add_argument('--n-samples', type=int, default=2000, help="Number of random samples for correlation")
     parser.add_argument('--grid-res', type=int, default=128, help="Resolution for GT SDF calculation")
     parser.add_argument('--bound-limit', type=float, default=0.5, help="Distance range (rad) for correlation analysis")

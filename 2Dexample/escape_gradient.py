@@ -124,13 +124,13 @@ def get_device():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-path', default='output/block_world5/model_final.pt', help="Path to the NDF model")
-    parser.add_argument('--world-file', default='config/block_world5.yaml', help="World YAML file")
+    parser.add_argument('--model-path', default='output/block_world2/model_final.pt', help="Path to the NDF model")
+    parser.add_argument('--world-file', default='config/block_world2.yaml', help="World YAML file")
     parser.add_argument('--n-samples', type=int, default=200, help="Number of samples near collision")
-    parser.add_argument('--lr', type=float, default=0.05, help="Learning rate for gradient escape")
-    parser.add_argument('--max-steps', type=int, default=100, help="Maximum steps for gradient escape")
-    parser.add_argument('--safety-margin', type=float, default=0.02, help="Safety margin for escape")
-    parser.add_argument('--output-dir', default='output/escape', help="Output directory for results")
+    parser.add_argument('--lr', type=float, default=0.2, help="Learning rate for gradient escape")
+    parser.add_argument('--max-steps', type=int, default=50, help="Maximum steps for gradient escape")
+    parser.add_argument('--safety-margin', type=float, default=0.0, help="Safety margin for escape")
+    parser.add_argument('--output-dir', default='output/escape_gradient', help="Output directory for results")
     parser.add_argument('--n-layers', type=int, default=20, help="NDF layers")
     parser.add_argument('--n-hidden', type=int, default=128, help="NDF hidden units")
     args = parser.parse_args()
@@ -173,7 +173,35 @@ if __name__ == "__main__":
     print(f"{'='*60}\n")
     
     os.makedirs(args.output_dir, exist_ok=True)
-    np.savez(os.path.join(args.output_dir, "gradient_escape_data.npz"), 
-             success_rate=np.mean(ndf_succ), 
-             gt_success_rate=np.mean(gt_succ), 
-             total_time=total_time)
+    import json
+    
+    world_name = os.path.splitext(os.path.basename(args.world_file))[0]
+    
+    # Detailed results
+    output_data = {
+        "world": world_name,
+        "method": "gradient",
+        "model_path": args.model_path,
+        "n_samples": n_actual,
+        "safety_margin": args.safety_margin,
+        "gt_success_rate": float(np.mean(gt_succ)),
+        "ndf_success_rate": float(np.mean(ndf_succ)),
+        "avg_gt_steps": float(np.mean(gt_steps)) if gt_steps else None,
+        "avg_ndf_steps": float(np.mean(ndf_steps)) if ndf_steps else None,
+        "total_time": total_time,
+        "avg_time_per_sample": total_time / n_actual,
+        "results": [
+            {
+                "gt_success": bool(r['gt_success']),
+                "ndf_success": bool(r['ndf_success']),
+                "gt_steps": int(r['gt_steps']),
+                "ndf_steps": int(r['ndf_steps'])
+            } for r in results
+        ]
+    }
+    
+    output_path = os.path.join(args.output_dir, f"escape_{world_name}.json")
+    with open(output_path, 'w') as f:
+        json.dump(output_data, f, indent=4)
+        
+    print(f"Results saved to {output_path}")

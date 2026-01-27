@@ -205,7 +205,7 @@ class ArmAnimator(object):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Plot the config space from Fig 6.1 in Intro to AMR textbook')
     parser.add_argument('-nx', type=int, default=201, help='Resolution (n points in each dimension)')
-    parser.add_argument('-w', '--world', default='config/random_world_20.yaml', help='World definition (obstacles)')
+    parser.add_argument('-w', '--world', default='config/block_world2.yaml', help='World definition (obstacles)')
     parser.add_argument('-sa', '--save-animation', default=None, help='Save animation to file')
     parser.add_argument('-na', '--no-animation', action='store_true', help='Don\'t animate')
     parser.add_argument('--arm-shadows', type=int, default=0,
