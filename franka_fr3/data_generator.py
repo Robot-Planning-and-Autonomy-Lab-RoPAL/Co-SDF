@@ -47,29 +47,20 @@ class FR3Env:
 
 def _oracle_worker(q):
     env = _GLOBAL_ENV
-    for i in range(env.nq):
-        if env.model.jnt_limited[i]:
-            lo, hi = env.model.jnt_range[i]
-            if q[i] < lo or q[i] > hi:
-                return -1
-        env.data.qpos[i] = q[i]
-    
+    # 1. Update robot pose (Limit checking is now handled by sampling domain, not labels)
+    env.data.qpos[:env.nq] = q
     if env.model.nq > env.nq:
-        for i in range(env.nq, env.model.nq):
-            env.data.qpos[i] = 0.04
-    mujoco.mj_forward(env.model, env.data)
+        env.data.qpos[env.nq:env.model.nq] = 0.04
+    mujoco.mj_fwdPosition(env.model, env.data)
     
-    is_collision = False
     for i in range(env.data.ncon):
         c = env.data.contact[i]
-        g1, g2 = c.geom1, c.geom2
-        b1, b2 = env.model.geom_bodyid[g1], env.model.geom_bodyid[g2]
-        if not (env.is_robot_body[b1] or env.is_robot_body[b2]):
-            continue
-        is_collision = True
-        break
-    return -1 if is_collision else 1
-
+        b1, b2 = env.model.geom_bodyid[c.geom1], env.model.geom_bodyid[c.geom2]
+        # XOR logic: return -1 if ONLY ONE of the bodies is a robot part
+        # This ignores robot-robot (self-collision) and env-env contacts.
+        if env.is_robot_body[b1] ^ env.is_robot_body[b2]:
+            return -1
+    return 1
 class DataGenerator:
     def __init__(self, model_path, bounds, n_workers=None, use_gpu=True):
         self.model_path = model_path
@@ -80,8 +71,10 @@ class DataGenerator:
         self.span = self.hi - self.lo
         self.n_workers = n_workers or (os.cpu_count() or 4)
         self.device = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
-        self.cp_manager = ControlPointManager(device=self.device, n_points_per_link=2)
-        print(f"Using {self.device.upper()} for FK computation")
+        # Using 1 point per link -> 7 points * 3 = 21D xyz
+        self.n_points_per_link = 1
+        self.cp_manager = ControlPointManager(device=self.device, n_points_per_link=self.n_points_per_link)
+        print(f"Using {self.device.upper()} for FK computation (Feature Dim: 21D)")
     
     def _jacobian_weighted_sample(self, n_target):
         if n_target <= 0: return np.zeros((0, self.dim))
@@ -112,59 +105,87 @@ class DataGenerator:
     
     def _parallel_label(self, points, desc, pool):
         if len(points) == 0: return np.array([], dtype=int)
-        it = pool.imap(_oracle_worker, points, chunksize=256)
+        it = pool.imap(_oracle_worker, points, chunksize=1024)
         return np.fromiter(tqdm(it, total=len(points), desc=desc, ncols=80, leave=False), 
                            dtype=int, count=len(points))
     
     def _sample_boundary_points(self, n_target, sigma, pool):
-        X_in_all, X_out_all, W_in_all, W_out_all = [], [], [], []
-        if n_target <= 0: return np.array(X_in_all), np.array(X_out_all), np.array(W_in_all), np.array(W_out_all)
+        """Directed Gaussian Boundary Sampling: Enhanced for sparse obstacle-only boundaries"""
+        X_in_all, X_out_all = [], []
+        if n_target <= 0: return np.array(X_in_all), np.array(X_out_all)
         
-        batch_size = max(n_target // 10, 1000)
         pbar = tqdm(total=n_target, desc="Found Boundary Pts", ncols=80)
+        
+        batch_size = 8192
+        curr_sigma = sigma
+        consecutive_failures = 0
+        
         while (len(X_in_all) + len(X_out_all)) < n_target:
-            q1 = self._jacobian_weighted_sample(batch_size)
-            noise = np.random.randn(batch_size, self.dim) * (sigma * self.span)
+            # 1. Label a base batch
+            # Mix weighted samples with pure random to explore fresh areas
+            q1_weighted = self._jacobian_weighted_sample(batch_size // 2)
+            q1_random = self.lo + np.random.rand(batch_size // 2, self.dim) * (self.hi - self.lo)
+            q1 = np.vstack([q1_weighted, q1_random])
+            
+            l1 = self._parallel_label(q1, "Label Base", pool)
+            
+            # 2. Perturb ALL and label second batch
+            # If failing, increase sigma to jump further
+            noise = np.random.randn(batch_size, self.dim) * (curr_sigma * self.span)
             q2 = np.clip(q1 + noise, self.lo, self.hi)
+            l2 = self._parallel_label(q2, "Label Perturbed", pool)
             
-            l1 = self._parallel_label(q1, "Label Q1", pool)
-            l2 = self._parallel_label(q2, "Label Q2", pool)
+            # 3. Crossing pairs
             mask = (l1 != l2)
-            if not np.any(mask): continue
+            if not np.any(mask):
+                consecutive_failures += 1
+                if consecutive_failures > 3:
+                    curr_sigma *= 1.5 # Search wider
+                    if curr_sigma > 0.5: curr_sigma = sigma
+                continue
             
-            n_pairs = np.sum(mask)
-            q_cols, q_frees = np.zeros((n_pairs, self.dim)), np.zeros((n_pairs, self.dim))
-            q_cols[l1[mask]==-1] = q1[mask][l1[mask]==-1]
-            q_cols[l2[mask]==-1] = q2[mask][l2[mask]==-1]
-            q_frees[l1[mask]==1] = q1[mask][l1[mask]==1]
-            q_frees[l2[mask]==1] = q2[mask][l2[mask]==1]
+            consecutive_failures = 0
+            curr_sigma = sigma # Reset sigma on success
             
-            for _ in range(5):
-                q_mid = (q_cols + q_frees) / 2
-                l_mid = self._parallel_label(q_mid, "Refining", pool)
-                q_cols[l_mid==-1] = q_mid[l_mid==-1]
-                q_frees[l_mid==1] = q_mid[l_mid==1]
+            idx_crossing = np.where(mask)[0]
+            q_cols = []
+            q_frees = []
+            for idx in idx_crossing:
+                if l1[idx] == -1:
+                    q_cols.append(q1[idx]); q_frees.append(q2[idx])
+                else:
+                    q_cols.append(q2[idx]); q_frees.append(q1[idx])
+            
+            q_cols, q_frees = np.array(q_cols), np.array(q_frees)
+            
+            # 4. Light Bisection
+            q_mid = (q_cols + q_frees) / 2
+            l_mid = self._parallel_label(q_mid, "Final Polish", pool)
+            q_cols[l_mid==-1] = q_mid[l_mid==-1]
+            q_frees[l_mid==1] = q_mid[l_mid==1]
             
             X_in_all.extend(q_cols); X_out_all.extend(q_frees)
-            W_in_all.extend([100.0] * len(q_cols)); W_out_all.extend([100.0] * len(q_frees))
-            pbar.n = min(len(X_in_all) + len(X_out_all), n_target); pbar.refresh()
+            pbar.n = min(len(X_in_all) + len(X_out_all), n_target)
+            pbar.refresh()
+            
         pbar.close()
-        return np.array(X_in_all), np.array(X_out_all), np.array(W_in_all), np.array(W_out_all)
+        return np.array(X_in_all[:n_target//2]), np.array(X_out_all[:n_target//2])
     
     def _sample_aabb_points(self, n_pts, pool):
-        if n_pts <= 0: return np.zeros((0, self.dim)), np.zeros((0, self.dim)), np.zeros(0), np.zeros(0)
+        if n_pts <= 0: return np.zeros((0, self.dim)), np.zeros((0, self.dim))
         X_aabb = self._jacobian_weighted_sample(n_pts)
         L_aabb = self._parallel_label(X_aabb, "Labeling AABB", pool)
         X_in, X_out = X_aabb[L_aabb == -1], X_aabb[L_aabb == 1]
-        return X_in, X_out, np.ones(len(X_in), dtype=np.float32), np.ones(len(X_out), dtype=np.float32)
+        return X_in, X_out
     
-    def generate(self, n_pts, near_ratio=0.7, sigma=0.05):
-        print(f">>> Generating {n_pts} points <<<")
+    def generate(self, n_pts, near_ratio=0.7, sigma=0.03):
+        print(f">>> Generating {n_pts} points (7D Gaussian+AABB) <<<")
         with Pool(processes=self.n_workers, initializer=_init_oracle, initargs=(self.model_path,)) as pool:
             n_boundary_target = int(n_pts * near_ratio)
-            X_in_bound, X_out_bound, _, _ = self._sample_boundary_points(n_boundary_target, sigma, pool)
+            X_in_bound, X_out_bound = self._sample_boundary_points(n_boundary_target, sigma, pool)
+            
             n_aabb_needed = n_pts - len(X_in_bound) - len(X_out_bound)
-            X_in_aabb, X_out_aabb, _, _ = self._sample_aabb_points(max(0, n_aabb_needed), pool)
+            X_in_aabb, X_out_aabb = self._sample_aabb_points(max(0, n_aabb_needed), pool)
         
         X_in = np.vstack([X_in_bound, X_in_aabb]); X_out = np.vstack([X_out_bound, X_out_aabb])
 
@@ -172,22 +193,27 @@ class DataGenerator:
             frac = n_pts / (len(X_in) + len(X_out))
             X_in = X_in[:int(len(X_in)*frac)]; X_out = X_out[:int(len(X_out)*frac)]
         
+        Q_in, Q_out = X_in.copy(), X_out.copy()
         print(f"Augmenting {len(X_in) + len(X_out)} points with XYZ...")
-        return self._augment_with_xyz(X_in), self._augment_with_xyz(X_out)
+        return self._augment_with_xyz(X_in), self._augment_with_xyz(X_out), Q_in, Q_out
 
     def _augment_with_xyz(self, q_np):
-        if len(q_np) == 0: return np.zeros((0, self.dim + 42))
+        if len(q_np) == 0: return np.zeros((0, 21))
         q_torch = torch.from_numpy(q_np).float().to(self.device)
         with torch.no_grad():
             points = self.cp_manager.get_control_points(q_torch)
             points_flat = points.reshape(q_np.shape[0], -1).cpu().numpy()
-        return np.hstack([q_np, points_flat])
+        return points_flat
     
-    def save(self, X_in, X_out, outdir="inputs", prefix="fr3"):
+    def save(self, X_in, X_out, Q_in=None, Q_out=None, outdir="inputs", prefix="fr3"):
         os.makedirs(outdir, exist_ok=True)
         np.save(os.path.join(outdir, f"{prefix}_Xtrain_in.npy"), X_in)
         np.save(os.path.join(outdir, f"{prefix}_Xtrain_out.npy"), X_out)
-        print(f"Saved to {outdir} (49D features: 7 joint angles + 42 xyz coords)")
+        if Q_in is not None:
+            np.save(os.path.join(outdir, f"{prefix}_Qtrain_in.npy"), Q_in)
+        if Q_out is not None:
+            np.save(os.path.join(outdir, f"{prefix}_Qtrain_out.npy"), Q_out)
+        print(f"Saved to {outdir} (Features Path: {outdir})")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -198,10 +224,21 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--outdir", type=str, default="inputs/bookshelf")
     args = parser.parse_args()
     
-    generator = DataGenerator(model_path=args.model, bounds=[(-np.pi, np.pi)]*7)
+    # Load model to get joint limits (using absolute path for correct include resolution)
+    abs_model_path = os.path.abspath(args.model)
+    mj_model = mujoco.MjModel.from_xml_path(abs_model_path)
+    jnt_limits = []
+    for i in range(7):
+        if mj_model.jnt_limited[i]:
+            jnt_limits.append(mj_model.jnt_range[i].tolist())
+        else:
+            jnt_limits.append([-np.pi, np.pi])
+            
+    print(f"Sampling bounds from MJ model: {jnt_limits}")
+    generator = DataGenerator(model_path=abs_model_path, bounds=jnt_limits)
     t0 = time.time()
-    X_in, X_out = generator.generate(n_pts=args.n_points, near_ratio=args.near_ratio, sigma=args.sigma)
-    generator.save(X_in, X_out, outdir=args.outdir)
+    X_in, X_out, Q_in, Q_out = generator.generate(n_pts=args.n_points, near_ratio=args.near_ratio, sigma=args.sigma)
+    generator.save(X_in, X_out, Q_in, Q_out, outdir=args.outdir)
     print(f"Total time: {time.time()-t0:.2f}s")
 
     print(f"Shape: {X_in.shape}")

@@ -37,10 +37,10 @@ if __name__ == "__main__":
     parser.add_argument("-lr", "--learning-rate", type=float, default=5e-4, help="Adam's learning rate")
     parser.add_argument("-lm", "--loss-margin", type=float, default=1e-2, help="margin m in the hKR loss")
     parser.add_argument("-lmbd", "--loss-lambda", type=float, default=100., help="lambda in the hKR loss")
-    parser.add_argument("--eikonal-weight", type=float, default=1e-2, help="Weight for Eikonal regularization")
+    parser.add_argument("--eikonal-weight", type=float, default=0.1, help="Weight for Eikonal regularization")
     parser.add_argument("--eikonal-target", type=float, default=1.0, help="Target gradient norm for Eikonal loss")
     parser.add_argument("--eikonal-normalize-scale", type=float, default=1.0, help="Scale factor to normalize gradient norm (default 1.0)")
-    parser.add_argument("--n-points-per-link", type=int, default=2, help="Number of control points per link for G-NDF")
+    parser.add_argument("--n-points-per-link", type=int, default=1, help="Number of control points per link for G-NDF")
     
     parser.add_argument("-cp", "--checkpoint-freq", type=int, default=10, help="Number of epochs between each model save")
     parser.add_argument("-cpu", action="store_true", help="force training on CPU")

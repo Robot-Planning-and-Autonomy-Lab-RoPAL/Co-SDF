@@ -26,48 +26,55 @@ def _worker_dist_approx(q):
     
     def check_collision(q_test):
         mj_data.qpos[:7] = q_test
+        if mj_model.nq > 7:
+            mj_data.qpos[7:mj_model.nq] = 0.04
         mujoco.mj_forward(mj_model, mj_data)
-        for i in range(mj_data.ncon):
-            c = mj_data.contact[i]
-            b1, b2 = mj_model.geom_bodyid[c.geom1], mj_model.geom_bodyid[c.geom2]
-            if is_robot[b1] or is_robot[b2]: return True
-        return False
+        return mj_data.ncon > 0
 
     lo, hi = mj_model.jnt_range[:7, 0], mj_model.jnt_range[:7, 1]
     is_coll = check_collision(q)
     
-    refine_samples = 50
-    max_dist = 0.5
-    current_min = max_dist
+    # User-recommended exponential schedule and decreasing budget
+    radii = [0.05, 0.1, 0.2, 0.4, 0.8, 1.6]
+    Ns    = [120, 80, 50, 30, 20, 10]
     
-    if is_coll:
-        for _ in range(refine_samples):
-            delta = np.random.randn(7) * 0.1
+    # Anisotropic weights: favor proximal/sensitive joints for higher hit-rate
+    weights = np.array([1.0, 1.0, 1.0, 0.8, 0.8, 0.6, 0.6])
+    
+    current_min = float('inf')
+    found_crossing = False
+
+    for radius, n_samples in zip(radii, Ns):
+        for _ in range(n_samples):
+            # Anisotropic direction sampling
+            delta = np.random.randn(7) * weights
+            # Scale to radius * u for volume sampling
+            delta = (delta / (np.linalg.norm(delta) + 1e-9)) * radius * np.random.rand()
             q_test = np.clip(q + delta, lo, hi)
-            if not check_collision(q_test):
-                d = np.linalg.norm(delta)
+            
+            if check_collision(q_test) != is_coll:
+                found_crossing = True
+                q_cross, q_orig = q_test, q
+                # Binary search refinement (9 steps for high precision)
+                for _ in range(9):
+                    mid = (q_cross + q_orig) / 2
+                    if check_collision(mid) != is_coll: q_cross = mid
+                    else: q_orig = mid
+                
+                d = np.linalg.norm(q_cross - q)
                 if d < current_min:
-                    q_free, q_orig = q_test, q
-                    for _ in range(5):
-                        mid = (q_free + q_orig) / 2
-                        if not check_collision(mid): q_free = mid
-                        else: q_orig = mid
-                    current_min = np.linalg.norm(q_free - q)
-        return is_coll, -current_min
-    else:
-        for _ in range(refine_samples):
-            delta = np.random.randn(7) * 0.1
-            q_test = np.clip(q + delta, lo, hi)
-            if check_collision(q_test):
-                d = np.linalg.norm(delta)
-                if d < current_min:
-                    q_coll, q_orig = q_test, q
-                    for _ in range(5):
-                        mid = (q_coll + q_orig) / 2
-                        if check_collision(mid): q_coll = mid
-                        else: q_orig = mid
-                    current_min = np.linalg.norm(q_coll - q)
-        return is_coll, current_min
+                    current_min = d
+        
+        # Aggressive early exit: if we found a point much closer than the current radius,
+        # we've likely captured the local boundary.
+        if found_crossing and current_min < radius * 0.7:
+            break
+            
+    if not found_crossing:
+        # Miss: return NaN for distance to avoid corrupting Spearman rank
+        return is_coll, np.nan, False
+
+    return is_coll, current_min if not is_coll else -current_min, True
 
 def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir):
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -94,21 +101,17 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir):
     # 1. Compute NDF values in bulk on GPU
     print("Computing NDF values...")
     
-    # Initialize FK preprocessing (for models that need it)
-    cp_manager = ControlPointManager(device=device, n_points_per_link=2)
+    # Initialize FK preprocessing (matches model setting)
+    cp_manager = ControlPointManager(device=device, n_points_per_link=1)
     
     ndf_vals = []
     batch_size = 1000
     for i in range(0, n_samples, batch_size):
         q_batch = torch.from_numpy(qs[i:i+batch_size]).float().to(device)
         
-        # Compute FK features: control points from joint angles
+        # Pass joint angles (7D) - model's internal preprocess will handle 21D conversion
         with torch.no_grad():
-            points = cp_manager.get_control_points(q_batch)  # (B, 14, 3)
-            points_flat = points.reshape(q_batch.shape[0], -1)  # (B, 42)
-            x_features = torch.cat([q_batch, points_flat], dim=-1)  # (B, 49)
-            
-            ndf_outputs = model(x_features).squeeze()
+            ndf_outputs = model(q_batch).squeeze()
             if ndf_outputs.dim() == 0: ndf_outputs = ndf_outputs.unsqueeze(0)
             ndf_vals.extend(ndf_outputs.cpu().numpy().tolist())
     ndf_vals = np.array(ndf_vals)
@@ -121,11 +124,22 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir):
     
     gt_labels = np.array([r[0] for r in results])
     approx_dist = np.array([r[1] for r in results])
+    hit_flags = np.array([r[2] for r in results])
     
-    corr_dist, _ = spearmanr(approx_dist, ndf_vals)
+    # Calculate Metrics
+    # 1. Spearman Correlation only on HIT samples (Scientific approach)
+    hit_mask = hit_flags
+    if np.any(hit_mask):
+        corr_dist, _ = spearmanr(approx_dist[hit_mask], ndf_vals[hit_mask])
+    else:
+        corr_dist = 0.0
+    
+    # 2. Binary correlation (all points - the collision labels are exact)
     corr_binary, _ = spearmanr(ndf_vals, -gt_labels.astype(float))
     
-    # Automatic threshold optimization (maximize F1 score)
+    hit_rate = np.mean(hit_flags) * 100
+    
+    # Automatic threshold optimization (maximize F1 score - using all points)
     y_true = gt_labels
     thresh_range = np.linspace(np.percentile(ndf_vals, 5), np.percentile(ndf_vals, 95), 100)
     
@@ -149,7 +163,8 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir):
     print(f"CORRELATION & CLASSIFICATION ANALYSIS (Franka 7-DOF)")
     print(f"{'='*60}")
     print(f"Points Analyzed:      {n_samples}")
-    print(f"Distance Correlation: {corr_dist:.4f}")
+    print(f"GT Hit Rate:          {hit_rate:.2f}%")
+    print(f"Distance Correlation: {corr_dist:.4f} (on hit points)")
     print(f"Binary Correlation:   {corr_binary:.4f}")
     print(f"Optimal Threshold:    {best_thresh:.4f}")
     print(f"Best F1 Score:        {best_f1:.4f}")
@@ -160,15 +175,26 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir):
     
     os.makedirs(out_dir, exist_ok=True)
     
-    # Plot: Scatter plot (same style as 2D)
+    # Plot: Scatter plot with hit/miss distinction
     sns.set_theme()
-    plt.figure(figsize=(6, 6))
-    plt.scatter(approx_dist, ndf_vals, s=10, alpha=0.5)
+    plt.figure(figsize=(7, 7))
+    
+    # 1. Scatter HIT points (True distance known)
+    if np.any(hit_mask):
+        plt.scatter(approx_dist[hit_mask], ndf_vals[hit_mask], s=12, alpha=0.6, label='Hit (True Distance)')
+    
+    # 2. Scatter MISS points (Visualized at boundaries)
+    miss_mask = ~hit_flags
+    if np.any(miss_mask):
+        # Place miss points at +/- 1.6 with some jitter
+        viz_dist = (1.6 + np.random.rand(np.sum(miss_mask)) * 0.15) * np.where(gt_labels[miss_mask], -1, 1)
+        plt.scatter(viz_dist, ndf_vals[miss_mask], s=8, alpha=0.2, color='gray', label='Miss (Out of Range)')
+    
     plt.axhline(best_thresh, color='r', linestyle='--', label=f'Optimal Threshold={best_thresh:.3f}')
     plt.axvline(0, color='k', linestyle='-', alpha=0.3)
     plt.xlabel("Approximate GT C-Space Distance (rad)")
     plt.ylabel("NDF Prediction")
-    plt.title(f"NDF vs. Approx C-space Distance (7D Franka)")
+    plt.title(f"NDF Evaluation (Franka 7D)\nHit Rate: {hit_rate:.1f}%, Spearman_hit: {corr_dist:.3f}")
     plt.legend()
     plt.tight_layout()
     
@@ -209,7 +235,7 @@ def verify_gradients(model_path, scene_xml, n_samples=100):
         for i in range(mj_data.ncon):
             c = mj_data.contact[i]
             b1, b2 = mj_model.geom_bodyid[c.geom1], mj_model.geom_bodyid[c.geom2]
-            if is_robot_body[b1] or is_robot_body[b2]:
+            if is_robot_body[b1] ^ is_robot_body[b2]:
                 return True
         return False
     
@@ -235,12 +261,8 @@ def verify_gradients(model_path, scene_xml, n_samples=100):
                 q_t = torch.from_numpy(q_coll).float().unsqueeze(0).to(device)
                 q_t.requires_grad = True
                 
-                # Compute FK features
-                points = cp_manager.get_control_points(q_t)
-                points_flat = points.reshape(q_t.shape[0], -1)
-                x_features = torch.cat([q_t, points_flat], dim=-1)
-                
-                ndf_val = model(x_features)
+                # Pass joint angles (7D) - model's internal preprocess will handle 21D conversion
+                ndf_val = model(q_t)
                 ndf_val.backward()
                 grad = q_t.grad.squeeze().cpu().numpy()
                 

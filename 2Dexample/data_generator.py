@@ -147,11 +147,11 @@ def plot_cspace(theta, c_space, outdir, prefix):
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser()
-	parser.add_argument('-w', '--world', default='config/block_world5.yaml')
-	parser.add_argument("-n", "--n-train", type=int, default=5000)
-	parser.add_argument("-r", "--near-ratio", type=float, default=0.6)
-	parser.add_argument("-s", "--sigma", type=float, default=0.01)
-	parser.add_argument("--n-points-per-link", type=int, default=4)
+	parser.add_argument("--world", default='config/block_world5.yaml', help="path to the world file")
+	parser.add_argument("--n-train", type=int, default=5000, help="number of training samples to generate")
+	parser.add_argument("--near-ratio", type=float, default=0.6, help="ratio of near-boundary samples")
+	parser.add_argument("--sigma", type=float, default=0.01, help="stddev for boundary sampling noise")
+	parser.add_argument("--n-points-per-link", type=int, default=1, help="control points per link for workspace augmentation")
 	parser.add_argument("--outdir", type=str, default="inputs/block_world5", help="output directory")
 	parser.add_argument("-visu", action="store_true",  default=True, help="generate visualization of sampled configurations")
 	args = parser.parse_args()

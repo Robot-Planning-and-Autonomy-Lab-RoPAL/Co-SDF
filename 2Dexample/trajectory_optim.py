@@ -11,6 +11,7 @@ import time
 
 import robot_tools
 import trajectory_verify
+from geometry_tools_2d import ControlPointManager2D
 
 
 from common.models import load_model as global_load_model
@@ -31,19 +32,21 @@ class NDFOptimizer2D:
         self.nq = 2
         self.model = load_2d_model(model_path, device, n_layers=n_layers, n_hidden=n_hidden)
         self.problem = robot_tools.PlanningProblem(world_file)
+        self.cp_manager = ControlPointManager2D(
+            base_position=[self.problem.robot._base_position.x, self.problem.robot._base_position.y],
+            link_lengths=self.problem.robot._link_lengths.tolist(),
+            device=device
+        )
         self.lower = np.array([0.0, 0.0])
         self.upper = np.array([2 * np.pi, 2 * np.pi])
         
         # For gradient computation
         self.cnt_check = 0
-        self.latest_p_collision = None
-        self.latest_p_limit = None
-        self.latest_p_cost = None
+        self.p_hash_collision = None
+        self.p_hash_cost = None
         self.var_p_collision = None
-        self.var_p_limit = None
         self.var_p_cost = None
         self.collision_cost = None
-        self.joint_limit_cost = None
         self.obj = None
 
     def optimize_rrt(self, start: np.ndarray, goal: np.ndarray, max_iterations: int = 1000, goal_sample_rate: float = 0.2) -> Tuple[bool, np.ndarray]:
@@ -72,37 +75,71 @@ class NDFOptimizer2D:
         N = len(path)
         if N == num_waypoints:
             return path
+        
+        # 对路径进行解离(Unwrap)，确保插值时不会在 0/2pi 处跳跃
+        path_unwrapped = np.unwrap(path, axis=0)
+        
         old_indices = np.arange(N)
         new_indices = np.linspace(0, N - 1, num_waypoints)
         resampled = np.zeros((num_waypoints, self.nq))
         for j in range(self.nq):
-            resampled[:, j] = np.interp(new_indices, old_indices, path[:, j])
+            resampled[:, j] = np.interp(new_indices, old_indices, path_unwrapped[:, j])
         return resampled
 
     def pre_process(self, p: np.ndarray, init_path: np.ndarray) -> torch.Tensor:
-        """Convert optimization variable to full path with fixed endpoints."""
+        """Convert optimization variable to full path with fixed endpoints.
+        NOTE: No remainder/wrap here to keep gradients continuous.
+        """
         p = torch.FloatTensor(p).reshape([-1, self.nq]).to(self.device)
-        p = torch.remainder(p, 2 * np.pi)  # wrap to [0, 2π)
         init_start = torch.from_numpy(init_path[:1]).float().to(self.device)
         init_end = torch.from_numpy(init_path[-1:]).float().to(self.device)
         full_path = torch.cat([init_start, p, init_end], dim=0).requires_grad_(True)
         return full_path
 
-    def con_collision_free(self, p: np.ndarray, init_path: np.ndarray, safety_margin: float) -> float:
-        """Collision constraint: must be >= 0 for feasibility."""
-        self.var_p_collision = self.pre_process(p, init_path)
-        self.latest_p_collision = self.var_p_collision.data[1:-1].cpu().numpy().reshape(-1)
-        self.cnt_check += len(self.var_p_collision)
+    def get_interpolated_path(self, q_full: torch.Tensor, interp_steps: int) -> torch.Tensor:
+        """Interpolate between waypoints for denser collision checking."""
+        if interp_steps <= 1:
+            return q_full
         
-        ndf_values = self.model(self.var_p_collision).squeeze()
+        B, NQ = q_full.shape
+        diffs = q_full[1:] - q_full[:-1]
+        
+        # (B-1, interp_steps, NQ)
+        weights = torch.linspace(0, 1, interp_steps + 1, device=q_full.device)[:-1].reshape(1, -1, 1)
+        segments = q_full[:-1].unsqueeze(1) + weights * diffs.unsqueeze(1)
+        
+        # Flatten: ( (B-1)*interp_steps, NQ )
+        q_interp = segments.reshape(-1, NQ)
+        
+        # Add the very last point
+        q_interp = torch.cat([q_interp, q_full[-1:]], dim=0)
+        return q_interp
+
+    def con_collision_free(self, p: np.ndarray, init_path: np.ndarray, safety_margin: float, interp_steps: int = 10) -> float:
+        """Collision constraint: must be >= 0 for feasibility."""
+        p_hash = hash(p.tobytes())
+        if p_hash == self.p_hash_collision:
+            return float(self.collision_cost.item())
+
+        self.var_p_collision = self.pre_process(p, init_path)
+        self.p_hash_collision = p_hash
+        
+        q_interp = self.get_interpolated_path(self.var_p_collision, interp_steps)
+        self.cnt_check += len(q_interp)
+        
+        ndf_values = self.model(q_interp).squeeze()
+        # Max violation across all points (including interpolated ones)
+        # We want safety_margin - ndf <= 0
         self.collision_cost = -torch.sum(torch.clamp(safety_margin - ndf_values, min=0))
         return float(self.collision_cost.item())
 
     def grad_con_collision_free(self, p: np.ndarray) -> np.ndarray:
         """Gradient of collision constraint."""
-        if not np.allclose(p, self.latest_p_collision):
-            # Scipy may copy arrays, recompute forward pass
+        p_hash = hash(p.tobytes())
+        if p_hash != self.p_hash_collision:
+            # This should rarely happen if scipy calls fun then jac
             self.con_collision_free(p, self.init_path_cache, self.safety_margin_cache)
+        
         self.var_p_collision.grad = None
         self.collision_cost.backward()
         if self.var_p_collision.grad is None:
@@ -110,52 +147,72 @@ class NDFOptimizer2D:
         return self.var_p_collision.grad[1:-1].cpu().numpy().reshape(-1).astype(np.float64)
 
     def con_joint_limit(self, p: np.ndarray, init_path: np.ndarray) -> float:
-        """Joint limit constraint: must be >= 0 for feasibility."""
-        self.var_p_limit = self.pre_process(p, init_path)
-        self.latest_p_limit = self.var_p_limit.data[1:-1].cpu().numpy().reshape(-1)
-        
-        lower_torch = torch.from_numpy(self.lower).float().to(self.device)
-        upper_torch = torch.from_numpy(self.upper).float().to(self.device)
-        
-        self.joint_limit_cost = -torch.sum(
-            torch.clamp(lower_torch - self.var_p_limit, min=0) + 
-            torch.clamp(self.var_p_limit - upper_torch, min=0)
-        )
-        return float(self.joint_limit_cost.item())
+        """Joint limit constraint: In unwrapped space, we don't apply hard periodicity limits.
+        Instead, we allow the optimizer to find the shortest 'real' distance.
+        Note: If you want to force it back to [0, 2pi], do it after optimization.
+        """
+        return 0.0 # No hard joint limits in periodic C-space
 
     def grad_con_joint_limit(self, p: np.ndarray) -> np.ndarray:
-        """Gradient of joint limit constraint."""
-        if not np.allclose(p, self.latest_p_limit):
-            self.con_joint_limit(p, self.init_path_cache)
-        self.var_p_limit.grad = None
-        self.joint_limit_cost.backward()
-        if self.var_p_limit.grad is None:
-            return np.zeros(len(p), dtype=np.float64)
-        return self.var_p_limit.grad[1:-1].cpu().numpy().reshape(-1).astype(np.float64)
+        return np.zeros(len(p), dtype=np.float64)
 
-    def cost(self, p: np.ndarray, init_path: np.ndarray) -> float:
-        """Objective: path smoothness (sum of squared accelerations)."""
+    def cost(self, p: np.ndarray, init_path: np.ndarray, smoothness_type: str = "joint", smoothness_weight: float = 1.0) -> float:
+        """Objective: path smoothness."""
+        p_hash = hash(p.tobytes())
+        if p_hash == self.p_hash_cost:
+            return float(self.obj.item())
+
         self.var_p_cost = self.pre_process(p, init_path)
-        self.latest_p_cost = self.var_p_cost.data[1:-1].cpu().numpy().reshape(-1)
+        self.p_hash_cost = p_hash
         
-        # Smoothness: acceleration penalty
         if len(self.var_p_cost) < 3:
             self.obj = torch.tensor(0.0, device=self.device)
         else:
-            accel = self.var_p_cost[2:] - 2 * self.var_p_cost[1:-1] + self.var_p_cost[:-2]
-            self.obj = torch.sum(accel ** 2)
+            if smoothness_type == "joint":
+                # Joint space acceleration
+                accel = self.var_p_cost[2:] - 2 * self.var_p_cost[1:-1] + self.var_p_cost[:-2]
+                self.obj = smoothness_weight * torch.sum(accel ** 2)
+            else:
+                # Workspace smoothness (sum of squared distances between control points)
+                # Similar to diffco's implementation
+                cp = self.cp_manager.get_control_points(self.var_p_cost) # (N, CP, 2)
+                diffs = cp[1:] - cp[:-1] # (N-1, CP, 2)
+                self.obj = smoothness_weight * torch.sum(diffs ** 2)
         
         return float(self.obj.item())
 
-    def grad_cost(self, p: np.ndarray) -> np.ndarray:
-        """Gradient of objective function."""
-        if not np.allclose(p, self.latest_p_cost):
-            self.cost(p, self.init_path_cache)
+    def grad_cost(self, p: np.ndarray, smoothness_type: str = "joint", smoothness_weight: float = 1.0) -> np.ndarray:
+        p_hash = hash(p.tobytes())
+        if p_hash != self.p_hash_cost:
+            self.cost(p, self.init_path_cache, smoothness_type, smoothness_weight)
+            
         self.var_p_cost.grad = None
         self.obj.backward()
         if self.var_p_cost.grad is None:
             return np.zeros(len(p), dtype=np.float64)
         return self.var_p_cost.grad[1:-1].cpu().numpy().reshape(-1).astype(np.float64)
+
+    def con_max_speed(self, p: np.ndarray, init_path: np.ndarray, max_speed: float) -> float:
+        """Constraint: max distance between adjacent waypoints in joint space."""
+        q = self.pre_process(p, init_path)
+        diffs = q[1:] - q[:-1]
+        dist_sq = torch.sum(diffs ** 2, dim=1)
+        # We want max_speed^2 - dist_sq >= 0
+        violation = torch.sum(torch.clamp(dist_sq - max_speed**2, min=0))
+        return -float(violation.item())
+
+    def grad_con_max_speed(self, p: np.ndarray, init_path: np.ndarray, max_speed: float) -> np.ndarray:
+        q = self.pre_process(p, init_path)
+        diffs = q[1:] - q[:-1]
+        dist_sq = torch.sum(diffs ** 2, dim=1)
+        violation = torch.sum(torch.clamp(dist_sq - max_speed**2, min=0))
+        cost_val = -violation
+        
+        q.grad = None
+        cost_val.backward()
+        if q.grad is None:
+            return np.zeros(len(p), dtype=np.float64)
+        return q.grad[1:-1].cpu().numpy().reshape(-1).astype(np.float64)
 
     def optimize(
         self,
@@ -165,18 +222,16 @@ class NDFOptimizer2D:
         max_iter: int = 200,
         num_trials: int = 5,
         optimizer_method: str = "SLSQP",
+        smoothness_type: str = "joint",
+        max_speed: float = 0.5,
         verbose: bool = True
     ) -> Tuple[bool, np.ndarray, Dict]:
         if verbose:
             print(f"\n{'='*60}")
-            print("NDF TRAJECTORY OPTIMIZATION (2D - Constrained)")
+            print(f"NDF TRAJECTORY OPTIMIZATION (2D - {optimizer_method})")
             print(f"{'='*60}")
-            print(f"  Initial waypoints: {len(initial_path)}")
-            print(f"  Target waypoints: {num_waypoints}")
-            print(f"  Safety margin: {safety_margin}")
-            print(f"  Optimizer: {optimizer_method}")
-            print(f"  Max iterations: {max_iter}")
-            print(f"  Num trials: {num_trials}")
+            print(f"  Target waypoints: {num_waypoints}, Smoothness: {smoothness_type}")
+            print(f"  Safety margin: {safety_margin}, Max speed: {max_speed}")
 
         start_time = time.time()
         self.cnt_check = 0
@@ -202,12 +257,12 @@ class NDFOptimizer2D:
             self.safety_margin_cache = safety_margin
             
             # Partial function wrappers
-            cost_fn = lambda p: self.cost(p, init_path)
-            grad_cost_fn = lambda p: self.grad_cost(p)
+            cost_fn = lambda p: self.cost(p, init_path, smoothness_type=smoothness_type)
+            grad_cost_fn = lambda p: self.grad_cost(p, smoothness_type=smoothness_type)
             collision_fn = lambda p: self.con_collision_free(p, init_path, safety_margin)
             grad_collision_fn = lambda p: self.grad_con_collision_free(p)
-            limit_fn = lambda p: self.con_joint_limit(p, init_path)
-            grad_limit_fn = lambda p: self.grad_con_joint_limit(p)
+            speed_fn = lambda p: self.con_max_speed(p, init_path, max_speed)
+            grad_speed_fn = lambda p: self.grad_con_max_speed(p, init_path, max_speed)
             
             result = minimize(
                 cost_fn,
@@ -216,7 +271,7 @@ class NDFOptimizer2D:
                 method=optimizer_method,
                 constraints=[
                     {'type': 'ineq', 'fun': collision_fn, 'jac': grad_collision_fn},
-                    {'type': 'ineq', 'fun': limit_fn, 'jac': grad_limit_fn}
+                    {'type': 'ineq', 'fun': speed_fn, 'jac': grad_speed_fn}
                 ],
                 options={'maxiter': max_iter, 'disp': False}
             )
@@ -243,7 +298,6 @@ class NDFOptimizer2D:
         # Reconstruct full path
         optimized_x = best_solution.x.reshape(-1, self.nq)
         optimized_path = np.vstack([init_path[:1], optimized_x, init_path[-1:]])
-        optimized_path = np.remainder(optimized_path, 2 * np.pi)
         
         # Compute metrics
         metrics = self.evaluate_path(optimized_path, safety_margin)
@@ -251,6 +305,9 @@ class NDFOptimizer2D:
         metrics['time'] = end_time - start_time
         metrics['cnt_check'] = self.cnt_check
         metrics['optimizer_cost'] = best_solution.fun
+        
+        # Finally, wrap for output
+        optimized_path = np.remainder(optimized_path, 2 * np.pi)
         
         if verbose:
             print(f"\nOptimization complete!")
@@ -262,41 +319,52 @@ class NDFOptimizer2D:
         return success, optimized_path, metrics
 
     def evaluate_path(self, path: np.ndarray, safety_margin: float) -> Dict:
-        """Compute evaluation metrics for a path."""
+        """Compute evaluation metrics for a path. 
+        Works best if path is unwrapped, but handles wrapped path too via periodic diffs.
+        """
         metrics = {}
         
-        # 1. Path length
-        diffs = path[1:] - path[:-1]
+        # Periodic difference helper
+        def p_diff(q1, q2):
+            return (q1 - q2 + np.pi) % (2 * np.pi) - np.pi
+
+        # 1. Path length (periodic)
+        diffs = p_diff(path[1:], path[:-1])
         metrics['path_length'] = float(np.sum(np.linalg.norm(diffs, axis=1)))
         
-        # 2. Smoothness (sum of squared accelerations)
+        # 2. Smoothness (use local accelerations, but sensitive to wrap if already wrapped)
+        # If the path is unwrapped, this is standard. If wrapped, p_diff handles it.
         if len(path) >= 3:
-            accel = path[2:] - 2 * path[1:-1] + path[:-2]
+            # Simple approximation of acceleration in periodic space
+            v1 = p_diff(path[1:-1], path[:-2])
+            v2 = p_diff(path[2:], path[1:-1])
+            accel = v2 - v1
             metrics['smoothness'] = float(np.sum(accel ** 2))
         else:
             metrics['smoothness'] = 0.0
         
-        # 3. Max speed violation
+        # 3. Max speed violation (periodic)
         step_lengths = np.linalg.norm(diffs, axis=1)
         metrics['max_step'] = float(np.max(step_lengths))
         
         # 4. Collision violations (NDF-based)
+        # We MUST wrap for NDF if the model doesn't handle it, but our FK does.
+        # However, to be safe and consistent with training, we wrap to [0, 2pi]
+        path_wrapped = np.remainder(path, 2 * np.pi)
         with torch.no_grad():
-            path_torch = torch.from_numpy(path).float().to(self.device)
+            path_torch = torch.from_numpy(path_wrapped).float().to(self.device)
             ndf_values = self.model(path_torch).squeeze().cpu().numpy()
         violations = np.maximum(0, safety_margin - ndf_values)
         metrics['collision_violations'] = int(np.sum(violations > 1e-6))
         metrics['max_violation'] = float(np.max(violations))
         metrics['avg_ndf'] = float(np.mean(ndf_values))
         
-        # 5. Joint limit violations
-        lower_viol = np.maximum(0, self.lower - path)
-        upper_viol = np.maximum(0, path - self.upper)
-        metrics['joint_limit_violations'] = int(np.sum((lower_viol + upper_viol) > 1e-6))
+        # 5. Joint limit violations (Not applicable for periodic)
+        metrics['joint_limit_violations'] = 0
         
         # 6. TRUE COLLISION CHECK (using robot_tools - ground truth)
         path_collision_free = True
-        for q in path:
+        for q in path_wrapped:
             self.problem.robot.set_link_angles(q)
             fp = self.problem.robot.get_current_polygon()
             if any(fp.intersect(o) for o in self.problem.workspace.obstacles):
@@ -314,8 +382,10 @@ class NDFOptimizer2D:
         safety_margin: float = 0.02,
         max_iter: int = 200,
         num_trials: int = 5,
-        collision_weight: float = 100.0,
+        collision_weight: float = 1000.0,
         smooth_weight: float = 1.0,
+        smoothness_type: str = "joint",
+        max_speed: float = 0.5,
         lr: float = 0.01,
         verbose: bool = True
     ) -> Tuple[bool, np.ndarray, Dict]:
@@ -324,10 +394,9 @@ class NDFOptimizer2D:
             print(f"\n{'='*60}")
             print("NDF TRAJECTORY OPTIMIZATION (2D - Adam)")
             print(f"{'='*60}")
-            print(f"  Initial waypoints: {len(initial_path)}")
-            print(f"  Target waypoints: {num_waypoints}")
-            print(f"  Smooth weight: {smooth_weight}, Collision weight: {collision_weight}")
-            print(f"  Max iterations: {max_iter}, Num trials: {num_trials}")
+            print(f"  Target waypoints: {num_waypoints}, Smoothness: {smoothness_type}")
+            print(f"  Weights: smooth={smooth_weight}, collision={collision_weight}")
+            print(f"  Max speed: {max_speed}, LR: {lr}")
 
         start_time = time.time()
         self.cnt_check = 0
@@ -353,29 +422,33 @@ class NDFOptimizer2D:
                 optimizer.zero_grad()
                 
                 q_full = torch.cat([start_tensor, x, goal_tensor], dim=0)
-                q_full = torch.remainder(q_full, 2 * np.pi)
                 
                 # Smoothness
-                if len(q_full) >= 3:
-                    accel = q_full[2:] - 2 * q_full[1:-1] + q_full[:-2]
-                    smooth_cost = torch.sum(accel ** 2)
-                else:
+                if len(q_full) < 3:
                     smooth_cost = torch.tensor(0.0, device=self.device)
+                else:
+                    if smoothness_type == "joint":
+                        # Joint space acceleration
+                        accel = q_full[2:] - 2 * q_full[1:-1] + q_full[:-2]
+                        smooth_cost = torch.sum(accel ** 2)
+                    else:
+                        # Workspace smoothness (distances between control points)
+                        cp = self.cp_manager.get_control_points(q_full)
+                        diffs = cp[1:] - cp[:-1]
+                        smooth_cost = torch.sum(diffs ** 2)
                 
-                # NDF collision penalty
-                ndf_values = self.model(q_full).squeeze()
-                self.cnt_check += len(q_full)
+                # NDF collision penalty (interpolated)
+                q_interp = self.get_interpolated_path(q_full, interp_steps=10)
+                ndf_values = self.model(q_interp).squeeze()
+                self.cnt_check += len(q_interp)
                 collision_penalty = torch.sum(torch.clamp(safety_margin - ndf_values, min=0))
                 
-                # Joint limit penalty
-                lower_torch = torch.from_numpy(self.lower).float().to(self.device)
-                upper_torch = torch.from_numpy(self.upper).float().to(self.device)
-                joint_penalty = torch.sum(
-                    torch.clamp(lower_torch - q_full, min=0) ** 2 +
-                    torch.clamp(q_full - upper_torch, min=0) ** 2
-                )
+                # Max speed penalty (limit movement between waypoints)
+                diffs_q = q_full[1:] - q_full[:-1]
+                dist_sq = torch.sum(diffs_q ** 2, dim=1)
+                speed_penalty = torch.sum(torch.clamp(dist_sq - max_speed**2, min=0))
                 
-                loss = smooth_weight * smooth_cost + collision_weight * collision_penalty + 1000.0 * joint_penalty
+                loss = smooth_weight * smooth_cost + collision_weight * collision_penalty + 100.0 * speed_penalty
                 loss.backward()
                 optimizer.step()
                 
@@ -393,14 +466,16 @@ class NDFOptimizer2D:
         end_time = time.time()
         
         optimized_path = best_solution.cpu().numpy()
-        optimized_path = np.remainder(optimized_path, 2 * np.pi)
         
-        # Evaluate
+        # Evaluate (on unwrapped best_solution)
         metrics = self.evaluate_path(optimized_path, safety_margin)
         metrics['success'] = True  # Adam always returns a solution
         metrics['time'] = end_time - start_time
         metrics['cnt_check'] = self.cnt_check
         metrics['optimizer_cost'] = best_cost
+        
+        # Finally wrap for output
+        optimized_path = np.remainder(optimized_path, 2 * np.pi)
         
         if verbose:
             print(f"Optimization complete! Time: {metrics['time']:.2f}s\n")
@@ -414,16 +489,18 @@ class NDFOptimizer2D:
         safety_margin: float = 0.02,
         max_iter: int = 200,
         num_trials: int = 5,
+        optimizer_method: str = "COBYLA",
+        smoothness_type: str = "joint",
+        max_speed: float = 0.5,
         verbose: bool = True
     ) -> Tuple[bool, np.ndarray, Dict]:
         """Gradient-free scipy minimize (COBYLA) with constraints."""
         if verbose:
             print(f"\n{'='*60}")
-            print("NDF TRAJECTORY OPTIMIZATION (2D - Gradient Free)")
+            print(f"NDF TRAJECTORY OPTIMIZATION (2D - {optimizer_method})")
             print(f"{'='*60}")
-            print(f"  Initial waypoints: {len(initial_path)}")
-            print(f"  Target waypoints: {num_waypoints}")
-            print(f"  Max iterations: {max_iter}, Num trials: {num_trials}")
+            print(f"  Target waypoints: {num_waypoints}, Smoothness: {smoothness_type}")
+            print(f"  Safety margin: {safety_margin}, Max speed: {max_speed}")
 
         start_time = time.time()
         self.cnt_check = 0
@@ -445,17 +522,18 @@ class NDFOptimizer2D:
             self.init_path_cache = init_path
             self.safety_margin_cache = safety_margin
             
-            cost_fn = lambda p: self.cost(p, init_path)
+            # Partial function wrappers
+            cost_fn = lambda p: self.cost(p, init_path, smoothness_type=smoothness_type)
             collision_fn = lambda p: self.con_collision_free(p, init_path, safety_margin)
-            limit_fn = lambda p: self.con_joint_limit(p, init_path)
+            speed_fn = lambda p: self.con_max_speed(p, init_path, max_speed)
             
             result = minimize(
                 cost_fn,
                 x0,
-                method='COBYLA',
+                method=optimizer_method,
                 constraints=[
                     {'type': 'ineq', 'fun': collision_fn},
-                    {'type': 'ineq', 'fun': limit_fn}
+                    {'type': 'ineq', 'fun': speed_fn}
                 ],
                 options={'maxiter': max_iter, 'disp': False}
             )
@@ -481,13 +559,16 @@ class NDFOptimizer2D:
         
         optimized_x = best_solution.x.reshape(-1, self.nq)
         optimized_path = np.vstack([init_path[:1], optimized_x, init_path[-1:]])
-        optimized_path = np.remainder(optimized_path, 2 * np.pi)
         
+        # Compute metrics on unwrapped
         metrics = self.evaluate_path(optimized_path, safety_margin)
         metrics['success'] = success
         metrics['time'] = end_time - start_time
         metrics['cnt_check'] = self.cnt_check
         metrics['optimizer_cost'] = best_solution.fun
+        
+        # Wrap for output
+        optimized_path = np.remainder(optimized_path, 2 * np.pi)
         
         if verbose:
             print(f"Optimization complete! Time: {metrics['time']:.2f}s\n")
@@ -541,14 +622,16 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=str, default="output/traj/optim.npy", help="Output path")
     parser.add_argument("--world", type=str, default="config/block_world5.yaml", help="World YAML")
     parser.add_argument("--model", type=str, default="output/block_world5/model_final.pt", help="NDF model path")
-    parser.add_argument("--waypoints", type=int, default=10, help="Number of waypoints")
-    parser.add_argument("--safety-margin", type=float, default=0.02, help="Safety margin for NDF")
-    parser.add_argument("--max-iter", type=int, default=200, help="Max iterations per trial")
+    parser.add_argument("--waypoints", type=int, default=30, help="Number of waypoints")
+    parser.add_argument("--safety-margin", type=float, default=0.01, help="Safety margin for NDF (aligned with loss-margin)")
+    parser.add_argument("--max-iter", type=int, default=300, help="Max iterations per trial")
     parser.add_argument("--num-trials", type=int, default=5, help="Number of optimization trials")
     parser.add_argument("--optimizer", choices=["adam", "slsqp", "trust-constr", "cobyla"], default="slsqp", help="Optimizer type")
-    parser.add_argument("--collision-weight", type=float, default=1000.0, help="Collision weight")
+    parser.add_argument("--smoothness-type", choices=["joint", "workspace"], default="workspace", help="Smoothness objective type")
+    parser.add_argument("--max-speed", type=float, default=0.3, help="Maximum joint space movement between waypoints")
+    parser.add_argument("--collision-weight", type=float, default=1000.0, help="Collision weight (Adam only)")
     parser.add_argument("--smooth-weight", type=float, default=1.0, help="Smoothness weight")
-    parser.add_argument("--lr", type=float, default=0.01, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate (Adam only)")
     parser.add_argument("--n-layers", type=int, default=20, help="NDF layers")
     parser.add_argument("--n-hidden", type=int, default=128, help="NDF hidden units")
     parser.add_argument("--interp", type=int, default=10, help="Interpolation steps for collision checking")
@@ -585,6 +668,8 @@ if __name__ == "__main__":
             num_trials=args.num_trials,
             collision_weight=args.collision_weight,
             smooth_weight=args.smooth_weight,
+            smoothness_type=args.smoothness_type,
+            max_speed=args.max_speed,
             lr=args.lr,
             verbose=True
         )
@@ -595,6 +680,9 @@ if __name__ == "__main__":
             safety_margin=args.safety_margin,
             max_iter=args.max_iter,
             num_trials=args.num_trials,
+            optimizer_method=args.optimizer.upper(),
+            smoothness_type=args.smoothness_type,
+            max_speed=args.max_speed,
             verbose=True
         )
     elif args.optimizer in ["slsqp", "trust-constr"]:
@@ -605,6 +693,8 @@ if __name__ == "__main__":
             max_iter=args.max_iter,
             num_trials=args.num_trials,
             optimizer_method=args.optimizer.upper(),
+            smoothness_type=args.smoothness_type,
+            max_speed=args.max_speed,
             verbose=True
         )
     else:

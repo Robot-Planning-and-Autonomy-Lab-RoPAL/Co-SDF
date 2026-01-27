@@ -28,25 +28,25 @@ if __name__ == "__main__":
     # dataset parameters
     parser.add_argument("--dataset", type=str, default="block_world5", help="prefix of dataset files, e.g. 'block_world'")
     parser.add_argument("--data", type=str, default="inputs/block_world5", help="directory where the dataset npy/npz files are stored")    
-    parser.add_argument("-o", "--output-name", type=str, default="block_world5", help="custom output folder name")
+    parser.add_argument("--output-name", type=str, default="block_world5", help="custom output folder name")
     parser.add_argument("--unsigned", action="store_true", help="flag for training an unsigned distance field instead of a signed one")
-    parser.add_argument("-n-hidden", "--n-hidden", type=int, default=256, help="size of the layers")
-    parser.add_argument("-n-layers", "--n-layers", type=int, default=20, help="number of layers in the network")
-    parser.add_argument("-m", "--model", type=str, default="gndf", help="which model to train (SLL or GNDF)")
+    parser.add_argument("--n-hidden", type=int, default=256, help="size of the layers")
+    parser.add_argument("--n-layers", type=int, default=20, help="number of layers in the network")
+    parser.add_argument("--model", type=str, default="gndf", help="which model to train (SLL or GNDF)")
     
     # optimization parameters
-    parser.add_argument("-ne", "--epochs", type=int, default=200, help="Number of training epochs")
-    parser.add_argument('-bs',"--batch-size", type=int, default=200, help="Train batch size")
-    parser.add_argument("-tbs", "--test-batch-size", type = int, default = 5000, help="Test batch size")
-    parser.add_argument("-lr", "--learning-rate", type=float, default=5e-4, help="Adam's learning rate")
-    parser.add_argument("-lm", "--loss-margin", type=float, default=1e-2, help="margin m in the hKR loss")
-    parser.add_argument("-lmbd", "--loss-lambda", type=float, default=100.0, help="lambda in the hKR loss")
-    parser.add_argument("--n-points-per-link", type=int, default=4, help="Number of control points per link (must match data generation)")
-    parser.add_argument("--eikonal-weight", type=float, default=0.01, help="Weight of Eikonal loss (gradient norm ≈ 1 on θ)")
+    parser.add_argument("--epochs", type=int, default=200, help="Number of training epochs")
+    parser.add_argument("--batch-size", type=int, default=200, help="Train batch size")
+    parser.add_argument("--test-batch-size", type = int, default = 5000, help="Test batch size")
+    parser.add_argument("--learning-rate", type=float, default=5e-4, help="Adam's learning rate")
+    parser.add_argument("--loss-margin", type=float, default=1e-2, help="margin m in the hKR loss")
+    parser.add_argument("--loss-lambda", type=float, default=100.0, help="lambda in the hKR loss")
+    parser.add_argument("--n-points-per-link", type=int, default=1, help="Number of control points per link (must match data generation)")
+    parser.add_argument("--eikonal-weight", type=float, default=0.1, help="Weight of Eikonal loss (gradient norm ≈ 1 on θ)")
     
     # misc
-    parser.add_argument("-cp", "--checkpoint-freq", type=int, default=10, help="Number of epochs between each model save")
-    parser.add_argument("-cpu", action="store_true", help="force training on CPU")
+    parser.add_argument("--checkpoint-freq", type=int, default=10, help="Number of epochs between each model save")
+    parser.add_argument("--cpu", action="store_true", help="force training on CPU")
     
     args = parser.parse_args()
     

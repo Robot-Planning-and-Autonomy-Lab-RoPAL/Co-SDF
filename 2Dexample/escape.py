@@ -18,61 +18,100 @@ def check_2d_collision(problem, q):
     fp = problem.robot.get_current_polygon()
     return any(fp.intersect(o) for o in problem.workspace.obstacles)
 
-def sample_near_collision(problem, n_target, n_batch=1000, max_attempts=1000):
-
-    start_configs = []
-    pbar = tqdm(total=n_target, desc="Sampling collision pts", ncols=80)
-    attempts = 0
-    while len(start_configs) < n_target and attempts < max_attempts:
-        q_batch = np.random.uniform(0, 2*np.pi, (n_batch, 2))
-        for q in q_batch:
-            if check_2d_collision(problem, q):
-                start_configs.append(q)
-                pbar.update(1)
-                if len(start_configs) >= n_target: break
-        attempts += 1
+def sample_near_boundary_collision(problem, n_target):
+    """Find points barely on the collision boundary using binary search"""
+    configs = []
+    pbar = tqdm(total=n_target, desc="Boundary Sampling", ncols=80)
+    
+    while len(configs) < n_target:
+        # 1. Start with a collision point and a free point
+        q1 = np.random.uniform(0, 2*np.pi, 2)
+        c1 = check_2d_collision(problem, q1)
+        
+        # Random step to find the other state
+        q2 = (q1 + np.random.randn(2) * 0.5) % (2 * np.pi)
+        c2 = check_2d_collision(problem, q2)
+        
+        if c1 != c2:
+            q_coll, q_free = (q1, q2) if c1 else (q2, q1)
+            # Binary search to find boundary configuration
+            for _ in range(6):
+                mid = (q_coll + q_free) / 2
+                if check_2d_collision(problem, mid):
+                    q_coll = mid
+                else:
+                    q_free = mid
+            configs.append(q_coll)
+            pbar.update(1)
+            
     pbar.close()
-
-    return np.array(start_configs)
+    return np.array(configs)
 
 def run_gradient_escape(model, q0, problem, lr, max_steps, device, safety_margin):
-
+    """
+    Intensive Refined Escape:
+    1. Separate GT/NDF success tracking
+    2. Backtracking Line Search for step reliability
+    """
     q_curr = torch.tensor(q0, dtype=torch.float32, device=device, requires_grad=True)
-    optimizer = torch.optim.Adam([q_curr], lr=lr)
     
     trajectory = [q0.copy()]
-    success = False
-    steps_taken = max_steps
+    gt_success_step = None
+    ndf_success_step = None
     
     for step in range(max_steps):
+        # Current NDF value
         ndf_val = model(q_curr.reshape(1, -1)).squeeze()
         
-        # We want to MAXIMIZE NDF value (move to positive free space)
-        # Loss = -NDF
-        if ndf_val.item() >= safety_margin:
-            success = True
-            steps_taken = step
+        # Check GT success (truly collision-free)
+        if gt_success_step is None and not check_2d_collision(problem, q_curr.detach().cpu().numpy()):
+            gt_success_step = step
+            
+        # Check NDF success (model thinks it's safe)
+        if ndf_success_step is None and ndf_val.item() >= safety_margin:
+            ndf_success_step = step
+            
+        # Early exit only if BOTH are satisfied
+        if gt_success_step is not None and ndf_success_step is not None:
+            break
+
+        # Hinge Loss: ReLU(Margin - NDF)
+        loss = torch.nn.functional.relu(safety_margin - ndf_val)
+        
+        if q_curr.grad is not None: q_curr.grad.zero_()
+        loss.backward()
+        
+        grad = q_curr.grad.data.clone()
+        if grad.norm() < 1e-9:
             break
             
-        optimizer.zero_grad()
-        loss = -ndf_val
-        loss.backward()
-        optimizer.step()
+        # Line Search (Backtracking)
+        q_orig = q_curr.detach().clone()
+        v_orig = loss.item()
+        alpha = lr
+        step_taken = False
         
-        # Wrap to torus [0, 2pi)
-        with torch.no_grad():
-            q_curr.data = q_curr.data % (2 * np.pi)
+        for _ in range(5):
+            q_next = (q_orig - alpha * grad) % (2 * np.pi)
+            
+            with torch.no_grad():
+                v_next = torch.nn.functional.relu(safety_margin - model(q_next.reshape(1, -1)).squeeze()).item()
+                if v_next < v_orig:
+                    q_curr.data = q_next
+                    step_taken = True
+                    break
+            alpha *= 0.5
+            
+        if not step_taken:
+            break
             
         trajectory.append(q_curr.detach().cpu().numpy().copy())
         
-    q_final = q_curr.detach().cpu().numpy()
-    gt_success = not check_2d_collision(problem, q_final)
-    
     return {
-        "success": success,
-        "gt_success": gt_success,
-        "steps": steps_taken,
-        "final_q": q_final,
+        "ndf_success": ndf_success_step is not None,
+        "gt_success": gt_success_step is not None,
+        "gt_steps": gt_success_step if gt_success_step is not None else step,
+        "ndf_steps": ndf_success_step if ndf_success_step is not None else step,
         "trajectory": np.array(trajectory)
     }
 
@@ -103,7 +142,7 @@ if __name__ == "__main__":
     problem = robot_tools.PlanningProblem(args.world_file)
     model = load_2d_model(args.model_path, device, n_layers=args.n_layers, n_hidden=args.n_hidden)
     
-    q_starts = sample_near_collision(problem, args.n_samples)
+    q_starts = sample_near_boundary_collision(problem, args.n_samples)
     n_actual = len(q_starts)
     
     results = []
@@ -113,19 +152,28 @@ if __name__ == "__main__":
         results.append(res)
     total_time = time.time() - t0
     
-    success_flags = [r["success"] for r in results]
-    gt_success_flags = [r["gt_success"] for r in results]
-    steps_if_success = [r["steps"] for r in results if r["success"]]
+    ndf_succ = [r['ndf_success'] for r in results]
+    gt_succ = [r['gt_success'] for r in results]
+    gt_steps = [r['gt_steps'] for r in results if r['gt_success']]
+    ndf_steps = [r['ndf_steps'] for r in results if r['ndf_success']]
     
     print(f"\n{'='*60}")
-    print(f"  NDF GRADIENT ESCAPE RESULTS (safety_margin={args.safety_margin})")
+    print(f"  NDF GRADIENT ESCAPE (2D - Intensive Refined)")
     print(f"{'='*60}")
-    print(f"  NDF Success Rate: {np.mean(success_flags)*100:.1f}% ({sum(success_flags)}/{n_actual})")
-    print(f"  GT Success Rate:  {np.mean(gt_success_flags)*100:.1f}% ({sum(gt_success_flags)}/{n_actual})")
-    print(f"  Avg Steps (if success): {np.mean(steps_if_success):.1f}" if steps_if_success else "  Avg Steps: N/A")
-    print(f"  Total Time: {total_time:.2f}s")
-    print(f"  Avg Time/Sample: {total_time/n_actual*1000:.1f} ms")
+    print(f"  Total Samples:    {n_actual}")
+    print(f"  Goal Condition:   not check_2d_collision(q)")
+    print(f"  Hinge Loss:       relu(m - f)")
+    print(f"  ------------------------------------------------")
+    print(f"  GT Success Rate:  {np.mean(gt_succ)*100:.1f}% (NO COLLISION)")
+    print(f"  NDF Success Rate: {np.mean(ndf_succ)*100:.1f}% (NDF >= {args.safety_margin})")
+    print(f"  Avg Steps to GT:  {np.mean(gt_steps):.1f}" if gt_steps else "  Avg Steps to GT: N/A")
+    print(f"  Avg Steps to NDF: {np.mean(ndf_steps):.1f}" if ndf_steps else "  Avg Steps to NDF: N/A")
+    print(f"  Total Time:       {total_time:.2f}s")
+    print(f"  Avg Time/Sample:  {total_time/n_actual*1000:.1f} ms")
     print(f"{'='*60}\n")
     
     os.makedirs(args.output_dir, exist_ok=True)
-    np.savez(os.path.join(args.output_dir, "gradient_escape_data.npz"), success_rate=np.mean(success_flags), gt_success_rate=np.mean(gt_success_flags), total_time=total_time, final_configs=np.array([r["final_q"] for r in results]))
+    np.savez(os.path.join(args.output_dir, "gradient_escape_data.npz"), 
+             success_rate=np.mean(ndf_succ), 
+             gt_success_rate=np.mean(gt_succ), 
+             total_time=total_time)

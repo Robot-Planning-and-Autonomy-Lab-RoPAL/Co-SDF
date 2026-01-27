@@ -54,8 +54,10 @@ def render_trajectory_gif(path_file, scene_xml, output_file, fps=30, width=640, 
     print(f"Rendering {len(path)} frames (camera distance={camera_distance}m)...")
     
     for i, q in enumerate(path):
-        # Update robot configuration
         mj_data.qpos[:7] = q
+        # Set fingers to open (0.04)
+        if mj_model.nq > 7:
+            mj_data.qpos[7:mj_model.nq] = 0.04
         mujoco.mj_forward(mj_model, mj_data)
         
         # Render frame
@@ -84,25 +86,27 @@ def render_trajectory_gif(path_file, scene_xml, output_file, fps=30, width=640, 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Render Franka trajectory as GIF/MP4")
-    parser.add_argument("--path", default="output/optimized_path.npy", help="Path .npy file (T,7)")
+    parser.add_argument("--path", default="output/traj/rrt.npy", help="Path .npy file (T,7)")
     parser.add_argument("--scene", default="scenes/bookshelf.xml", help="Scene XML file")
-    parser.add_argument("--output-far", default="output/optimized_trajectory_far.gif", help="Output file for far view")
-    parser.add_argument("--output-front", default="output/optimized_trajectory_front.gif", help="Output file for front view")
+    parser.add_argument("--output-far", default="output/traj/rrt_far.gif", help="Output file for far view")
+    parser.add_argument("--output-front", default="output/traj/rrt_front.gif", help="Output file for front view")
     parser.add_argument("--fps", type=int, default=20, help="Frames per second (default: 20)")
     parser.add_argument("--width", type=int, default=640, help="Render width (max 640)")
     parser.add_argument("--height", type=int, default=480, help="Render height")
     parser.add_argument("--distance", type=float, default=2.0, help="Camera distance from target (m)")
+    parser.add_argument("--azimuth", type=float, default=60, help="Camera azimuth for far view")
+    parser.add_argument("--elevation", type=float, default=-20, help="Camera elevation for far view")
     args = parser.parse_args()
     
     # Generate far view
     print("="*60)
-    print("Generating FAR view (30°, -30°)...")
+    print(f"Generating FAR view ({args.azimuth}°, {args.elevation}°)...")
     print("="*60)
     render_trajectory_gif(args.path, args.scene, args.output_far, 
                          fps=args.fps, width=args.width, height=args.height,
-                         camera_distance=args.distance, azimuth=30, elevation=-30)
+                         camera_distance=args.distance, azimuth=args.azimuth, elevation=args.elevation)
     
-    # Generate front view
+    # Generate front view (fixed for reference)
     print("\n" + "="*60)
     print("Generating FRONT view (0°, -20°)...")
     print("="*60)

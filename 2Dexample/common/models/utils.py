@@ -77,6 +77,6 @@ def select_model(name, DIM, n_layers, n_hidden, **kwargs):
                 link_lengths=kwargs.get("link_lengths", [2.1, 2.1]),
                 device=kwargs.get("device", "cuda")
             )
-
+        
         case _:
             raise Exception(f"model name {name} not recognized")

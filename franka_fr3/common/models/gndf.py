@@ -12,7 +12,7 @@ class GNDF_Preprocessing_7D(nn.Module):
     - Coordinate normalization
     - NO periodic embedding (use raw joint angles directly)
     """
-    def __init__(self, n_points_per_link=2, device="cuda"):
+    def __init__(self, n_points_per_link=1, device="cuda"):
         super().__init__()
         self.device = device
         self.cp_manager = ControlPointManager(device=device, n_points_per_link=n_points_per_link)
@@ -30,15 +30,19 @@ class GNDF_Preprocessing_7D(nn.Module):
             points_flat = points.reshape(q.shape[0], -1)
             # Normalize physical points
             points_norm = (points_flat - self.xyz_mean) / self.xyz_std
-            return torch.cat([q, points_norm], dim=-1)
+            return points_norm
+        elif x.shape[1] == 21:
+            # Training: input is already xyz (B, 21)
+            points_norm = (x - self.xyz_mean) / self.xyz_std
+            return points_norm
         else:
-            # Training: input is [q, xyz] (B, 7 + 42)
+            # Fallback for other potential training formats
             q, points_raw = x[:, :7], x[:, 7:]
             points_norm = (points_raw - self.xyz_mean) / self.xyz_std
-            return torch.cat([q, points_norm], dim=-1)
+            return points_norm
 
 
-def G_NDF(n_layers=30, n_hidden=256, n_points_per_link=2, device="cuda"):
+def G_NDF(n_layers=30, n_hidden=256, n_points_per_link=1, device="cuda"):
     """
     Functional model builder for G-NDF 7D, aligned with 2D style.
     Returns an nn.Sequential model with preprocessing + core SLL network.
@@ -53,11 +57,19 @@ def G_NDF(n_layers=30, n_hidden=256, n_points_per_link=2, device="cuda"):
     # 2. Calculate dimensions
     n_joints = 7
     n_points = 7 * n_points_per_link  # 7 links, each with n_points_per_link control points
-    dim_in = n_joints + n_points * 3  # 7 + 42 = 49 (for n_points_per_link=2)
+    # Use PURE workspace features (21D for n_points_per_link=1)
+    dim_in = n_points * 3 
     
     # 3. Assemble Sequential model (matching 2D pattern)
-    layers = [preprocess]
-    layers.append(nn.ZeroPad1d((0, n_hidden - dim_in)))
+    class RobustPad(nn.Module):
+        def __init__(self, target):
+            super().__init__()
+            self.target = target
+        def forward(self, x):
+            if x.shape[1] >= self.target: return x
+            return torch.nn.functional.pad(x, (0, self.target - x.shape[1]))
+
+    layers = [preprocess, RobustPad(n_hidden)]
     
     for _ in range(n_layers):
         layers.append(SDPBasedLipschitzDense(n_hidden))

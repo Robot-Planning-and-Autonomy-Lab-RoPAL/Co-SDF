@@ -44,8 +44,15 @@ class SDPBasedLipschitzDense(nn.Module):
         return out
     
 def DenseSDP(dim_in, dim_hidden, n_layers):
-    layers = []
-    layers.append(nn.ZeroPad1d((0, dim_hidden-dim_in)))
+    class RobustPad(nn.Module):
+        def __init__(self, target):
+            super().__init__()
+            self.target = target
+        def forward(self, x):
+            if x.shape[1] >= self.target: return x
+            return F.pad(x, (0, self.target - x.shape[1]))
+            
+    layers = [RobustPad(dim_hidden)]
     for _ in range(n_layers):
         layers.append(SDPBasedLipschitzDense(dim_hidden))
     layers.append(torchlip.FrobeniusLinear(dim_hidden,1))

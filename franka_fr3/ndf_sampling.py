@@ -14,147 +14,90 @@ from geometry_tools import ControlPointManager
 
 def check_franka_collision(mj_model, mj_data, q, is_robot_body):
     mj_data.qpos[:7] = q
+    if mj_model.nq > 7:
+        mj_data.qpos[7:mj_model.nq] = 0.04
     mujoco.mj_forward(mj_model, mj_data)
     
     for i in range(mj_data.ncon):
         c = mj_data.contact[i]
         b1, b2 = mj_model.geom_bodyid[c.geom1], mj_model.geom_bodyid[c.geom2]
-        if is_robot_body[b1] or is_robot_body[b2]:
+        # XOR logic: Robot vs environment ONLY (Matches escape.py and NDF training)
+        if is_robot_body[b1] ^ is_robot_body[b2]:
             return True
     return False
 
 
-def sample_near_collision(scene_xml, n_target, n_batch=1000, max_attempts=100):
-
-    abs_xml = os.path.abspath(scene_xml)
-    mj_model = mujoco.MjModel.from_xml_path(abs_xml)
-    mj_data = mujoco.MjData(mj_model)
-    
-    robot_body_ids = set()
-    base_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "base")
-    for i in range(mj_model.nbody):
-        curr = i
-        while curr > 0:
-            if curr == base_id:
-                robot_body_ids.add(i)
-                break
-            curr = mj_model.body_parentid[curr]
-    is_robot_body = np.zeros(mj_model.nbody, dtype=bool)
-    if robot_body_ids:
-        is_robot_body[list(robot_body_ids)] = True
-    
+def find_near_boundary_collision(mj_model, mj_data, is_robot_body):
+    """Sample a collision point that is very close to the boundary."""
     lower = mj_model.jnt_range[:7, 0]
     upper = mj_model.jnt_range[:7, 1]
-    
-    start_configs = []
-    pbar = tqdm(total=n_target, desc="Sampling collision configs", ncols=80)
-    attempts = 0
-    
-    while len(start_configs) < n_target and attempts < max_attempts:
-        q_batch = lower + np.random.rand(n_batch, 7) * (upper - lower)
-        for q in q_batch:
-            if check_franka_collision(mj_model, mj_data, q, is_robot_body):
-                start_configs.append(q)
-                pbar.update(1)
-                if len(start_configs) >= n_target:
-                    break
-        attempts += 1
-    
-    pbar.close()
-    return np.array(start_configs)
+    while True:
+        q1 = lower + np.random.rand(7) * (upper - lower)
+        c1 = check_franka_collision(mj_model, mj_data, q1, is_robot_body)
+        q2 = np.clip(q1 + np.random.randn(7) * 0.15, lower, upper)
+        c2 = check_franka_collision(mj_model, mj_data, q2, is_robot_body)
+        
+        if c1 != c2:
+            q_coll, q_free = (q1, q2) if c1 else (q2, q1)
+            for _ in range(5): # Bisection
+                mid = (q_coll + q_free) / 2
+                if check_franka_collision(mj_model, mj_data, mid, is_robot_body): q_coll = mid
+                else: q_free = mid
+            return q_coll
 
 
-def run_sampling_escape(model, cp_manager, q0, scene_xml, step_size, max_steps, K, device, safety_margin):
-    """
-    Attempt to escape from collision using NDF gradient guidance.
-    
-    Args:
-        model: NDF model
-        cp_manager: ControlPointManager for geometry features
-        q0: Initial collision configuration (7,)
-        scene_xml: Scene XML path for ground truth collision checking
-        step_size: Step size for sampling
-        max_steps: Maximum steps allowed
-        K: Number of candidates to sample per step
-        device: Device
-        safety_margin: NDF threshold for escape
-    
-    Returns:
-        Dictionary with escape results
-    """
-    # Load scene for ground truth checking
-    abs_xml = os.path.abspath(scene_xml)
-    mj_model = mujoco.MjModel.from_xml_path(abs_xml)
-    mj_data = mujoco.MjData(mj_model)
-    
-    # Identify robot bodies
-    robot_body_ids = set()
-    base_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "base")
-    for i in range(mj_model.nbody):
-        curr = i
-        while curr > 0:
-            if curr == base_id:
-                robot_body_ids.add(i)
-                break
-            curr = mj_model.body_parentid[curr]
-    is_robot_body = np.zeros(mj_model.nbody, dtype=bool)
-    if robot_body_ids:
-        is_robot_body[list(robot_body_ids)] = True
-    
+def run_sampling_escape(model, q0, mj_model, mj_data, is_robot_body, step_size, max_steps, K, device, safety_margin):
     lower = mj_model.jnt_range[:7, 0]
     upper = mj_model.jnt_range[:7, 1]
     
     q_curr = torch.tensor(q0, dtype=torch.float32, device=device)
     
     trajectory = [q0.copy()]
+    gt_success_step = None
+    ndf_success_step = None
     ndf_history = []
-    success = False
-    steps_taken = max_steps
     
     for step in range(max_steps):
         with torch.no_grad():
-            # Evaluate current NDF
-            q_batch = q_curr.reshape(1, -1)
-            features = cp_manager.get_control_points(q_batch)
-            features_flat = torch.cat([q_batch, features.reshape(1, -1)], dim=-1)
-            ndf_curr = model(features_flat).item()
+            ndf_curr = model(q_curr.reshape(1, -1)).item()
             ndf_history.append(ndf_curr)
             
-            if ndf_curr >= safety_margin:
-                success = True
-                steps_taken = step
+            # 1. Track Successes
+            if gt_success_step is None and not check_franka_collision(mj_model, mj_data, q_curr.cpu().numpy(), is_robot_body):
+                gt_success_step = step
+            
+            if ndf_success_step is None and ndf_curr >= safety_margin:
+                ndf_success_step = step
+            
+            # Stop if both conditions met
+            if gt_success_step is not None and ndf_success_step is not None:
                 break
             
-            # Sample K candidates
+            # 2. Sample K candidates
             noise = torch.randn(K, 7, device=device) * step_size
             candidates = torch.clamp(q_curr + noise, 
                                     torch.from_numpy(lower).float().to(device),
                                     torch.from_numpy(upper).float().to(device))
             
             # Evaluate all candidates
-            cand_features = cp_manager.get_control_points(candidates)
-            cand_features_flat = torch.cat([candidates, cand_features.reshape(K, -1)], dim=-1)
-            ndf_candidates = model(cand_features_flat).squeeze()
+            ndf_candidates = model(candidates).squeeze()
             
             best_idx = torch.argmax(ndf_candidates)
             q_curr = candidates[best_idx]
             
             trajectory.append(q_curr.cpu().numpy().copy())
     
-    q_final = q_curr.cpu().numpy()
-    gt_success = not check_franka_collision(mj_model, mj_data, q_final, is_robot_body)
-    
     return {
-        "success": success,
-        "gt_success": gt_success,
-        "steps": steps_taken,
-        "final_q": q_final,
+        "ndf_success": ndf_success_step is not None,
+        "gt_success": gt_success_step is not None,
+        "gt_steps": gt_success_step if gt_success_step is not None else step,
+        "ndf_steps": ndf_success_step if ndf_success_step is not None else step,
+        "final_q": q_curr.cpu().numpy(),
         "trajectory": np.array(trajectory),
         "ndf_history": ndf_history
     }
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser(description="Franka 7D Sampling Escape Evaluation")
     parser.add_argument('--model-path', default='output/bookshelf/model_final.pt', help="NDF model path")
     parser.add_argument('--scene-xml', default='scenes/bookshelf.xml', help="Scene XML path")
@@ -167,20 +110,35 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"\nEvaluating Franka 7D NDF Sampling Escape on {device}...")
+    print(f"\nEvaluating Franka 7D NDF Sampling Escape (Standardized) on {device}...")
     
     model = load_model(args.model_path, device)
     model.eval()
+
+    # Pre-load MuJoCo model
+    abs_xml = os.path.abspath(args.scene_xml)
+    mj_model = mujoco.MjModel.from_xml_path(abs_xml)
+    mj_data = mujoco.MjData(mj_model)
     
-    cp_manager = ControlPointManager(device=device)
+    robot_body_ids = set()
+    base_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "base")
+    for i in range(mj_model.nbody):
+        curr = i
+        while curr > 0:
+            if curr == base_id:
+                robot_body_ids.add(i)
+                break
+            curr = mj_model.body_parentid[curr]
+    is_robot_body = np.zeros(mj_model.nbody, dtype=bool)
+    if robot_body_ids:
+        is_robot_body[list(robot_body_ids)] = True
     
-    print(f"\nSampling {args.n_samples} collision configurations...")
-    q_starts = sample_near_collision(args.scene_xml, args.n_samples)
+    print(f"\nSampling {args.n_samples} near-boundary collision configurations...")
+    q_starts = []
+    for _ in tqdm(range(args.n_samples), desc="Boundary Sampling", ncols=80):
+        q_starts.append(find_near_boundary_collision(mj_model, mj_data, is_robot_body))
+    q_starts = np.array(q_starts)
     n_actual = len(q_starts)
-    
-    if n_actual == 0:
-        print("Error: No collision configurations found!")
-        sys.exit(1)
     
     print(f"Found {n_actual} collision configurations\n")
     
@@ -188,32 +146,30 @@ if __name__ == "__main__":
     t0 = time.time()
     for i in tqdm(range(n_actual), desc="Escape attempts", ncols=80):
         res = run_sampling_escape(
-            model, cp_manager, q_starts[i], args.scene_xml,
+            model, q_starts[i], mj_model, mj_data, is_robot_body,
             step_size=args.step_size, max_steps=args.max_steps,
             K=args.K_sampling, device=device, safety_margin=args.safety_margin
         )
         results.append(res)
     total_time = time.time() - t0
     
-    success_flags = [r["success"] for r in results]
+    ndf_success_flags = [r["ndf_success"] for r in results]
     gt_success_flags = [r["gt_success"] for r in results]
-    steps_if_success = [r["steps"] for r in results if r["success"]]
+    gt_steps = [r["gt_steps"] for r in results if r["gt_success"]]
+    ndf_steps = [r["ndf_steps"] for r in results if r["ndf_success"]]
     
     print(f"\n{'='*60}")
-    print(f"  FRANKA 7D NDF SAMPLING ESCAPE RESULTS")
+    print(f"  FRANKA 7D NDF SAMPLING ESCAPE RESULTS (STANDARDIZED)")
     print(f"{'='*60}")
     print(f"  K samples per step: {args.K_sampling}")
-    print(f"  Step size: {args.step_size}")
     print(f"  Safety margin: {args.safety_margin}")
-    print(f"  Max steps: {args.max_steps}")
     print(f"{'='*60}")
-    print(f"  NDF Success Rate: {np.mean(success_flags)*100:.1f}% ({sum(success_flags)}/{n_actual})")
-    print(f"  GT Success Rate:  {np.mean(gt_success_flags)*100:.1f}% ({sum(gt_success_flags)}/{n_actual})")
-    if steps_if_success:
-        print(f"  Avg Steps (if success): {np.mean(steps_if_success):.1f}")
-        print(f"  Min/Max Steps: {np.min(steps_if_success):.0f}/{np.max(steps_if_success):.0f}")
-    else:
-        print(f"  Avg Steps: N/A (no successful escapes)")
+    print(f"  GT Success Rate:  {np.mean(gt_success_flags)*100:.1f}% (NO COLLISION)")
+    print(f"  NDF Success Rate: {np.mean(ndf_success_flags)*100:.1f}% (NDF >= margin)")
+    if gt_steps:
+        print(f"  Avg Steps (GT):   {np.mean(gt_steps):.1f}")
+    if ndf_steps:
+        print(f"  Avg Steps (NDF):  {np.mean(ndf_steps):.1f}")
     print(f"  Total Time: {total_time:.2f}s")
     print(f"  Avg Time/Sample: {total_time/n_actual*1000:.1f} ms")
     print(f"{'='*60}\n")
@@ -222,7 +178,7 @@ if __name__ == "__main__":
     output_file = os.path.join(args.output_dir, "franka_sampling_escape.npz")
     np.savez(
         output_file,
-        success_rate=np.mean(success_flags),
+        ndf_success_rate=np.mean(ndf_success_flags),
         gt_success_rate=np.mean(gt_success_flags),
         total_time=total_time,
         final_configs=np.array([r["final_q"] for r in results]),

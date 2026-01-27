@@ -36,12 +36,14 @@ class GNDF_Preprocessing_2D(nn.Module):
             points_flat = points.reshape(q.shape[0], -1)
             # Normalize physical points: (x-5)/5 -> [-1, 1]
             points_norm = (points_flat - 5.0) / 5.0
-            return torch.cat([q, points_norm], dim=-1)
+            # Return ONLY workspace features (xyz)
+            return points_norm
         else:
             # Training: input is [q, xyz] (B, 2 + N*2)
             q, points_raw = x[:, :2], x[:, 2:]
             points_norm = (points_raw - 5.0) / 5.0
-            return torch.cat([q, points_norm], dim=-1)
+            # Return ONLY workspace features (xyz)
+            return points_norm
 
 def G_NDF_2D(n_layers=20, n_hidden=128, n_points_per_link=2,
              base_position=[5.0, 5.0], 
@@ -60,9 +62,8 @@ def G_NDF_2D(n_layers=20, n_hidden=128, n_points_per_link=2,
     # 2. Dimensions
     n_joints = 2
     n_points = preprocess.cp_manager.get_n_points()
-    raw_dim = n_joints + n_points * 2
-    
-    dim_in = raw_dim
+    # Using ONLY workspace features (4D)
+    dim_in = n_points * 2 
         
     # 3. Assemble Sequential (mirrors sll.py style)
     layers = [preprocess]

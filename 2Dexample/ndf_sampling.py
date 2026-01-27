@@ -18,37 +18,63 @@ def check_2d_collision(problem, q):
     fp = problem.robot.get_current_polygon()
     return any(fp.intersect(o) for o in problem.workspace.obstacles)
 
-def sample_near_collision(problem, n_target, n_batch=5000, max_attempts=50):
-    start_configs = []
-    pbar = tqdm(total=n_target, desc="Sampling collision pts", ncols=80)
-    attempts = 0
-    while len(start_configs) < n_target and attempts < max_attempts:
-        q_batch = np.random.uniform(0, 2*np.pi, (n_batch, 2))
-        for q in q_batch:
-            if check_2d_collision(problem, q):
-                start_configs.append(q)
-                pbar.update(1)
-                if len(start_configs) >= n_target: break
-        attempts += 1
+def sample_near_boundary_collision(problem, n_target):
+    """Find points barely on the collision boundary using binary search"""
+    configs = []
+    pbar = tqdm(total=n_target, desc="Boundary Sampling", ncols=80)
+    
+    while len(configs) < n_target:
+        # 1. Start with a collision point and a free point
+        q1 = np.random.uniform(0, 2*np.pi, 2)
+        c1 = check_2d_collision(problem, q1)
+        
+        # Random step to find the other state
+        q2 = (q1 + np.random.randn(2) * 0.5) % (2 * np.pi)
+        c2 = check_2d_collision(problem, q2)
+        
+        if c1 != c2:
+            q_coll, q_free = (q1, q2) if c1 else (q2, q1)
+            # Binary search to find boundary configuration
+            for _ in range(6):
+                mid = (q_coll + q_free) / 2
+                if check_2d_collision(problem, mid):
+                    q_coll = mid
+                else:
+                    q_free = mid
+            configs.append(q_coll)
+            pbar.update(1)
+            
     pbar.close()
-    return np.array(start_configs)
+    return np.array(configs)
 
 def run_sampling_escape(model, q0, problem, step_size=0.1, max_steps=100, K=50, device="cuda", safety_margin=0.0):
+    """
+    Intensive Refined Sampling Escape:
+    1. Separate GT/NDF success tracking
+    2. Sample K candidates and pick the one with max NDF
+    """
     q_curr = torch.tensor(q0, dtype=torch.float32, device=device)
     
     trajectory = [q0.copy()]
     ndf_history = []
-    success = False
-    steps_taken = max_steps
+    gt_success_step = None
+    ndf_success_step = None
     
     for step in range(max_steps):
         with torch.no_grad():
             ndf_curr = model(q_curr.reshape(1, -1)).item()
             ndf_history.append(ndf_curr)
             
-            if ndf_curr >= safety_margin:
-                success = True
-                steps_taken = step
+            # Check GT success (truly collision-free)
+            if gt_success_step is None and not check_2d_collision(problem, q_curr.detach().cpu().numpy()):
+                gt_success_step = step
+                
+            # Check NDF success (model thinks it's safe)
+            if ndf_success_step is None and ndf_curr >= safety_margin:
+                ndf_success_step = step
+                
+            # Early exit if BOTH are satisfied
+            if gt_success_step is not None and ndf_success_step is not None:
                 break
             
             # Sample K candidates
@@ -56,22 +82,20 @@ def run_sampling_escape(model, q0, problem, step_size=0.1, max_steps=100, K=50, 
             noise = noise / (torch.norm(noise, dim=1, keepdim=True) + 1e-6) * step_size
             candidates = (q_curr + noise) % (2 * np.pi)
             
-            # Evaluate all candidates
+            # Evaluate all candidates and pick the best (max NDF)
             ndf_candidates = model(candidates).squeeze()
             best_idx = torch.argmax(ndf_candidates)
             q_curr = candidates[best_idx]
             
             trajectory.append(q_curr.cpu().numpy().copy())
             
-    q_final = q_curr.cpu().numpy()
-    gt_success = not check_2d_collision(problem, q_final)
-    
     return {
-        "success": success,
-        "gt_success": gt_success,
-        "steps": steps_taken,
-        "final_q": q_final,
-        "trajectory": np.array(trajectory)
+        "ndf_success": ndf_success_step is not None,
+        "gt_success": gt_success_step is not None,
+        "gt_steps": gt_success_step if gt_success_step is not None else step,
+        "ndf_steps": ndf_success_step if ndf_success_step is not None else step,
+        "trajectory": np.array(trajectory),
+        "ndf_history": ndf_history
     }
 
 def main(args):
@@ -81,34 +105,39 @@ def main(args):
     problem = robot_tools.PlanningProblem(args.world_file)
     model = load_2d_model(args.model_path, device, n_layers=args.n_layers, n_hidden=args.n_hidden)
     
-    q_starts = sample_near_collision(problem, args.n_samples)
+    q_starts = sample_near_boundary_collision(problem, args.n_samples)
     n_actual = len(q_starts)
     
     results = []
     t0 = time.time()
-    for i in tqdm(range(n_actual), desc="Sampling", ncols=80):
+    for i in tqdm(range(n_actual), desc="Sampling Escape", ncols=80):
         res = run_sampling_escape(model, q_starts[i], problem, step_size=args.step_size, max_steps=args.max_steps, K=args.K_sampling, device=device, safety_margin=args.safety_margin)
         results.append(res)
     total_time = time.time() - t0
     
-    success_flags = [r["success"] for r in results]
-    gt_success_flags = [r["gt_success"] for r in results]
-    steps_if_success = [r["steps"] for r in results if r["success"]]
+    ndf_succ = [r['ndf_success'] for r in results]
+    gt_succ = [r['gt_success'] for r in results]
+    gt_steps = [r['gt_steps'] for r in results if r['gt_success']]
+    ndf_steps = [r['ndf_steps'] for r in results if r['ndf_success']]
     
     print(f"\n{'='*60}")
-    print(f"  NDF SAMPLING ESCAPE RESULTS (K={args.K_sampling}, Step={args.step_size})")
+    print(f"  NDF SAMPLING ESCAPE (2D - Intensive Refined)")
     print(f"{'='*60}")
-    print(f"  NDF Success Rate: {np.mean(success_flags)*100:.1f}% ({sum(success_flags)}/{n_actual})")
-    print(f"  GT Success Rate:  {np.mean(gt_success_flags)*100:.1f}% ({sum(gt_success_flags)}/{n_actual})")
-    print(f"  Avg Steps (if success): {np.mean(steps_if_success):.1f}" if steps_if_success else "  Avg Steps: N/A")
-    print(f"  Total Time: {total_time:.2f}s")
-    print(f"  Avg Time/Sample: {total_time/n_actual*1000:.1f} ms")
+    print(f"  Total Samples:    {n_actual}")
+    print(f"  K samples per step: {args.K_sampling}")
+    print(f"  ------------------------------------------------")
+    print(f"  GT Success Rate:  {np.mean(gt_succ)*100:.1f}% (NO COLLISION)")
+    print(f"  NDF Success Rate: {np.mean(ndf_succ)*100:.1f}% (NDF >= {args.safety_margin})")
+    print(f"  Avg Steps to GT:  {np.mean(gt_steps):.1f}" if gt_steps else "  Avg Steps to GT: N/A")
+    print(f"  Avg Steps to NDF: {np.mean(ndf_steps):.1f}" if ndf_steps else "  Avg Steps to NDF: N/A")
+    print(f"  Total Time:       {total_time:.2f}s")
+    print(f"  Avg Time/Sample:  {total_time/n_actual*1000:.1f} ms")
     print(f"{'='*60}\n")
     
     os.makedirs(args.output_dir, exist_ok=True)
     np.savez(os.path.join(args.output_dir, "sampling_escape_data.npz"),
-             success_rate=np.mean(success_flags), gt_success_rate=np.mean(gt_success_flags),
-             total_time=total_time, final_configs=np.array([r["final_q"] for r in results]))
+             success_rate=np.mean(ndf_succ), gt_success_rate=np.mean(gt_succ),
+             total_time=total_time)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

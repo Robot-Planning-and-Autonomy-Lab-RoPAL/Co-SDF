@@ -37,6 +37,9 @@ def find_config_for_layer(planner, layer_num, lateral_offset=0.0, samples=5000, 
     for _ in range(samples):
         q = lo + np.random.rand(7) * (hi - lo)
         planner.mj_data.qpos[:7] = q
+        # Set fingers to open (0.04)
+        if planner.mj_model.nq > 7:
+            planner.mj_data.qpos[7:planner.mj_model.nq] = 0.04
         mujoco.mj_forward(planner.mj_model, planner.mj_data)
         
         ee_pos = planner.mj_data.site_xpos[ee_site_id].copy()
@@ -75,11 +78,15 @@ class RRT:
 
     def is_collision_free(self, q):
         self.mj_data.qpos[:7] = q
+        # Set fingers to open (0.04)
+        if self.mj_model.nq > 7:
+            self.mj_data.qpos[7:self.mj_model.nq] = 0.04
         mujoco.mj_forward(self.mj_model, self.mj_data)
         for i in range(self.mj_data.ncon):
             c = self.mj_data.contact[i]
             b1, b2 = self.mj_model.geom_bodyid[c.geom1], self.mj_model.geom_bodyid[c.geom2]
-            if self.is_robot_body[b1] or self.is_robot_body[b2]:
+            # XOR: ignore self-collision to match NDF model's training view
+            if self.is_robot_body[b1] ^ self.is_robot_body[b2]:
                 return False
         return True
 
@@ -165,7 +172,7 @@ if __name__ == "__main__":
     parser.add_argument("--start", type=float, nargs=7, default=None, help="Start configuration (7 values)")
     parser.add_argument("--goal", type=float, nargs=7, default=None, help="Goal configuration (7 values)")
     
-    parser.add_argument("--out", type=str, default="output/rrt_path.npy", help="Output path file")
+    parser.add_argument("--out", type=str, default="output/traj/rrt.npy", help="Output path file")
     args = parser.parse_args()
 
     # Initialize planner
