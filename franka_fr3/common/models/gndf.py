@@ -10,57 +10,50 @@ class GNDF_Preprocessing_7D(nn.Module):
     Modular layer for G-NDF preprocessing (aligned with 2D version):
     - FK (joint angles -> control points)
     - Coordinate normalization
-    - NO periodic embedding (use raw joint angles directly)
+    - NO periodic embedding
     """
     def __init__(self, n_points_per_link=1, device="cuda"):
         super().__init__()
         self.device = device
         self.cp_manager = ControlPointManager(device=device, n_points_per_link=n_points_per_link)
         
-        # Statistics for normalization (computed from training data)
-        # Data range: [-0.85, 1.19], mean=0.1472, std=0.3259
-        self.register_buffer('xyz_mean', torch.tensor(0.147218))
-        self.register_buffer('xyz_std', torch.tensor(0.325865))
+        # Statistics for normalization
+        self.register_buffer('xyz_mean', torch.tensor(0.116775))
+        self.register_buffer('xyz_std', torch.tensor(0.272722))
         
     def forward(self, x):
         if x.shape[1] == 7:
-            # Inference: input is q (B, 7)
+            # Inference Mode: input is q (B, 7), calculate XYZ internaly
             q = x
             points = self.cp_manager.get_control_points(q)
             points_flat = points.reshape(q.shape[0], -1)
             # Normalize physical points
             points_norm = (points_flat - self.xyz_mean) / self.xyz_std
             return points_norm
-        elif x.shape[1] == 21:
-            # Training: input is already xyz (B, 21)
-            points_norm = (x - self.xyz_mean) / self.xyz_std
-            return points_norm
         else:
-            # Fallback for other potential training formats
-            q, points_raw = x[:, :7], x[:, 7:]
-            points_norm = (points_raw - self.xyz_mean) / self.xyz_std
+            # Training Mode: input is full XYZ features (B, 21 or B, 27 etc.)
+            # We treat the entire input as coordinates to be normalized
+            points_norm = (x - self.xyz_mean) / self.xyz_std
             return points_norm
 
 
 def G_NDF(n_layers=30, n_hidden=256, n_points_per_link=1, device="cuda"):
     """
-    Functional model builder for G-NDF 7D, aligned with 2D style.
-    Returns an nn.Sequential model with preprocessing + core SLL network.
-    NO frequency encoding or periodic embedding.
+    Functional model builder for G-NDF 7D. 
+    Maintains 1-Lipschitz property through SDP-based layers.
     """
-    # 1. Preprocessing layer
+    # 1. Preprocessing
     preprocess = GNDF_Preprocessing_7D(
         n_points_per_link=n_points_per_link,
         device=device
     )
     
-    # 2. Calculate dimensions
-    n_joints = 7
-    n_points = 7 * n_points_per_link  # 7 links, each with n_points_per_link control points
-    # Use PURE workspace features (21D for n_points_per_link=1)
+    # 2. Dimensions
+    # 7 links arm + 2 links fingers = 9 active segments
+    n_points = 9 * n_points_per_link
     dim_in = n_points * 3 
     
-    # 3. Assemble Sequential model (matching 2D pattern)
+    # 3. Model Architecture
     class RobustPad(nn.Module):
         def __init__(self, target):
             super().__init__()
@@ -71,41 +64,28 @@ def G_NDF(n_layers=30, n_hidden=256, n_points_per_link=1, device="cuda"):
 
     layers = [preprocess, RobustPad(n_hidden)]
     
+    # Core Lipschitz Layers
     for _ in range(n_layers):
         layers.append(SDPBasedLipschitzDense(n_hidden))
         
     layers.append(torchlip.FrobeniusLinear(n_hidden, 1))
     
     model = nn.Sequential(*layers).to(device)
-    
-    # 4. Attach metadata for saving/loading
     model.id = "G-NDF-7D"
     model.meta = [n_layers, n_hidden, n_points_per_link]
     
     return model
 
-
 # Legacy class-based G_NDF for backward compatibility
 class G_NDF_Legacy(nn.Module):
-    """Legacy G-NDF (will be deprecated)."""
-    
     def __init__(self, n_layers=20, n_hidden=256, device="cuda"):
         super().__init__()
         self.device = device
         self.cp_manager = ControlPointManager(device=device, n_points_per_link=2)
-        
-        # 7 joints (q) + 14 points * 3 coords (xyz) = 49 dimensions.
         in_dim = 7 + 42
-        
         self.core = DenseSDP(in_dim, n_hidden, n_layers)
-        self.id = "G-NDF-Legacy"
-        self.meta = [n_layers, n_hidden]
 
     def forward(self, x):
-        """Forward pass.
-        If x.shape[1] == 7, it calculates xyz internally (for inference/optim).
-        If x.shape[1] == 49, it uses precomputed [q, xyz] (for training).
-        """
         if x.shape[1] == 7:
             q = x
             points = self.cp_manager.get_control_points(q)

@@ -38,9 +38,21 @@ def load_model(path, device:str):
             link_lengths=link_lengths,
             device=device,
         )
+    elif model_type == "G-NDF-2D-SIREN":
+        from .gndf_siren_2d import G_NDF_SIREN_2D
+        # meta format: [n_layers, n_hidden, n_points_per_link, base_position, link_lengths]
+        n_layers, n_hidden, n_points_per_link, base_position, link_lengths = data["meta"]
+        model = G_NDF_SIREN_2D(
+            n_layers=n_layers,
+            n_hidden=n_hidden,
+            n_points_per_link=n_points_per_link,
+            base_position=base_position,
+            link_lengths=link_lengths,
+            device=device,
+        )
     else:
         raise Exception(f"Model type {model_type} not recognized")
-    model.load_state_dict(data["state_dict"])
+    model.load_state_dict(data["state_dict"], strict=False)
     return model.to(device)
 
 def select_model(name, DIM, n_layers, n_hidden, **kwargs):
@@ -70,6 +82,17 @@ def select_model(name, DIM, n_layers, n_hidden, **kwargs):
         case "gndf":
             from .gndf_2d import G_NDF_2D
             return G_NDF_2D(
+                n_layers, 
+                n_hidden, 
+                n_points_per_link=kwargs.get("n_points_per_link", 2),
+                base_position=kwargs.get("base_position", [5.0, 5.0]),
+                link_lengths=kwargs.get("link_lengths", [2.1, 2.1]),
+                device=kwargs.get("device", "cuda")
+            )
+        
+        case "gndf_siren":
+            from .gndf_siren_2d import G_NDF_SIREN_2D
+            return G_NDF_SIREN_2D(
                 n_layers, 
                 n_hidden, 
                 n_points_per_link=kwargs.get("n_points_per_link", 2),

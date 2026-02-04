@@ -1,0 +1,54 @@
+Debug:   RRTConnect: Planner range detected to be 1.777153
+Info:    RRTConnect: Starting planning with 1 states already in datastructure
+Info:    RRTConnect: Created 6320 states (4141 start + 2179 goal)
+Info:    ProblemDefinition: Adding approximate solution from planner RRTConnect
+Using device: cuda
+Generating 1 valid test cases...
+OMPL: Planning path from [2.353304971691044, 5.9735141613602165] to [4.599253580133889, 3.761482191925223]...
+OMPL: Found path with 44 states in 5.0450s.
+  Case 1/1
+Benchmarking:   0%|          | 0/1 [00:00<?, ?it/s]Debug:   RRTConnect: Planner range detected to be 1.777153
+Info:    RRTConnect: Starting planning with 1 states already in datastructure
+Info:    RRTConnect: Created 6367 states (4106 start + 2261 goal)
+Info:    ProblemDefinition: Adding approximate solution from planner RRTConnect
+Benchmarking: 100%|██████████| 1/1 [00:20<00:00, 20.30s/it]Benchmarking: 100%|██████████| 1/1 [00:20<00:00, 20.30s/it]
+OMPL: Planning path from [2.353304971691044, 5.9735141613602165] to [4.599253580133889, 3.761482191925223]...
+OMPL: Found path with 74 states in 5.0429s.
+
+============================================================
+NDF TRAJECTORY OPTIMIZATION (2D - SLSQP)
+============================================================
+  Target waypoints: 30, Smoothness: workspace
+  Safety margin: 0.01, Max speed: 0.3, Interp: 10
+  Trial 0: success=False, cost=1.019585
+  Trial 1: success=False, cost=9.801207
+  Trial 2: success=False, cost=49.281219
+
+Optimization complete! Time: 9.1964s
+    - Collision Check: 5.5455s (60.3%)
+    - Cost Eval:       0.9047s (9.8%)
+    - Other overhead:  2.7462s
+  Collision checks: 1140720
+
+
+============================================================
+NDF TRAJECTORY OPTIMIZATION (2D - trust-constr)
+============================================================
+  Target waypoints: 30, Smoothness: workspace
+  Safety margin: 0.01, Max speed: 0.3, Interp: 10
+Error in LIP trust-constr: NDFOptimizer2D.optimize.<locals>.early_stopping_callback() takes 1 positional argument but 2 were given
+
+==================================================================================================================================
+ BENCHMARK RESULTS (N=1) | Margin=0.01 | World=block_world1.yaml
+==================================================================================================================================
+Method               | Succ%   | SolveT(s) | PathLen  | MinClr  
+----------------------------------------------------------------------------------------------------------------------------------
+RRT                  | 100.0   | 5.0433    | 5.628    | 0.0174  
+LIP Adam             | 0.0     | solve_time | path_length | min_clearance
+LIP SLSQP            | 100.0   | 9.1964    | 3.224    | 0.0282  
+LIP trust-constr     | 0.0     | solve_time | path_length | min_clearance
+LIP COBYLA           | 100.0   | 2.2271    | 5.576    | 0.0282  
+========================================================================================================================
+
+Detailed data saved to output/benchmark/details_block_world1.json
+Summary results saved to output/benchmark/summary_block_world1.json

@@ -24,19 +24,13 @@
     <geom name="floor" size="0 0 0.05" type="plane" pos="0 0 -0.8" material="groundplane"/>
 
     <!-- Large Table for robot and obstacles (robot at 0,0,0) -->
-    <!-- Robot sits at z=0. Table top is at z=0. 
-         Table box center at z=-0.02 (thickness 0.04). -->
     <geom name="table_surface" type="box" size="0.6 0.8 0.02" pos="0.3 0 -0.02" material="table_mat"/>
     
-    <!-- Legs for visuals 
-         Table bottom at -0.04. Floor at -0.8. 
-         Leg height = 0.76. Half-height = 0.38.
-         Leg center z = (-0.04 + -0.8) / 2 = -0.42. -->
+    <!-- Legs for visuals -->
     <geom name="table_leg1" type="cylinder" size="0.04 0.38" pos="-0.25 -0.75 -0.42" rgba="0.4 0.3 0.2 1"/>
     <geom name="table_leg2" type="cylinder" size="0.04 0.38" pos="0.85 -0.75 -0.42" rgba="0.4 0.3 0.2 1"/>
     <geom name="table_leg3" type="cylinder" size="0.04 0.38" pos="-0.25 0.75 -0.42" rgba="0.4 0.3 0.2 1"/>
     <geom name="table_leg4" type="cylinder" size="0.04 0.38" pos="0.85 0.75 -0.42" rgba="0.4 0.3 0.2 1"/>
-
-    <geom name="obs_0" type="box" size="0.023 0.038 0.024" pos="0.381 -0.177 0.024" rgba="0.80 0.67 0.58 1.00"/>
+    <geom name="obs_0" type="sphere" size="0.073" pos="0.417 -0.022 0.073" rgba="0.45 0.70 0.76 1.00"/>
   </worldbody>
 </mujoco>

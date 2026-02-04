@@ -56,8 +56,6 @@ def _oracle_worker(q):
     for i in range(env.data.ncon):
         c = env.data.contact[i]
         b1, b2 = env.model.geom_bodyid[c.geom1], env.model.geom_bodyid[c.geom2]
-        # XOR logic: return -1 if ONLY ONE of the bodies is a robot part
-        # This ignores robot-robot (self-collision) and env-env contacts.
         if env.is_robot_body[b1] ^ env.is_robot_body[b2]:
             return -1
     return 1
@@ -71,26 +69,26 @@ class DataGenerator:
         self.span = self.hi - self.lo
         self.n_workers = n_workers or (os.cpu_count() or 4)
         self.device = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
-        # Using 1 point per link -> 7 points * 3 = 21D xyz
+        # 1 point per link -> 9 segments total (7 arm + 2 finger) = 27D xyz
         self.n_points_per_link = 1
         self.cp_manager = ControlPointManager(device=self.device, n_points_per_link=self.n_points_per_link)
-        print(f"Using {self.device.upper()} for FK computation (Feature Dim: 21D)")
+        
+        # Pre-estimate max_det for all future calls
+        print(f"Pre-estimating max_det on {self.device}...")
+        q_test = torch.tensor(self.lo + np.random.rand(2000, self.dim) * self.span).float().to(self.device)
+        dets_test = self.cp_manager.get_jacobian_determinant(q_test)
+        self.max_det = 1.2 * dets_test.max().item()
+        print(f"Using {self.device.upper()} (Feature Dim: 27D, max_det: {self.max_det:.4f})")
     
     def _jacobian_weighted_sample(self, n_target):
         if n_target <= 0: return np.zeros((0, self.dim))
-        
         valid_q = []
         cnt = 0
-        batch_size = 5000
-        
-        q_test = torch.tensor(self.lo + np.random.rand(1000, self.dim) * self.span).float().to(self.device)
-        dets_test = self.cp_manager.get_jacobian_determinant(q_test)
-        max_det = 1.2 * dets_test.max().item()
-        
+        batch_size = 10000
         while cnt < n_target:
             q_rand = torch.tensor(self.lo + np.random.rand(batch_size, self.dim) * self.span).float().to(self.device)
             dets = self.cp_manager.get_jacobian_determinant(q_rand)
-            rej_u = torch.rand(batch_size, device=self.device) * max_det
+            rej_u = torch.rand(batch_size, device=self.device) * self.max_det
             mask = dets > rej_u
             accepted = q_rand[mask].cpu().numpy()
             if len(accepted) > 0:
@@ -198,7 +196,7 @@ class DataGenerator:
         return self._augment_with_xyz(X_in), self._augment_with_xyz(X_out), Q_in, Q_out
 
     def _augment_with_xyz(self, q_np):
-        if len(q_np) == 0: return np.zeros((0, 21))
+        if len(q_np) == 0: return np.zeros((0, 27))
         q_torch = torch.from_numpy(q_np).float().to(self.device)
         with torch.no_grad():
             points = self.cp_manager.get_control_points(q_torch)
@@ -217,11 +215,11 @@ class DataGenerator:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-m', '--model', default='scenes/bookshelf.xml')
+    parser.add_argument('-m', '--model', default='scenes/table_obs10.xml')
     parser.add_argument("-n", "--n-points", type=int, default=500000)
     parser.add_argument("-r", "--near-ratio", type=float, default=0.6)
     parser.add_argument("-s", "--sigma", type=float, default=0.05)
-    parser.add_argument("-o", "--outdir", type=str, default="inputs/bookshelf")
+    parser.add_argument("-o", "--outdir", type=str, default="inputs/table_obs10")
     args = parser.parse_args()
     
     # Load model to get joint limits (using absolute path for correct include resolution)

@@ -99,13 +99,13 @@ def run_sampling_escape(model, q0, mj_model, mj_data, is_robot_body, step_size, 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Franka 7D Sampling Escape Evaluation")
-    parser.add_argument('--model-path', default='output/bookshelf/model_final.pt', help="NDF model path")
-    parser.add_argument('--scene-xml', default='scenes/bookshelf.xml', help="Scene XML path")
+    parser.add_argument('--model-path', default='output/table_obs10/model_final.pt', help="NDF model path")
+    parser.add_argument('--scene-xml', default='scenes/table_obs10.xml', help="Scene XML path")
     parser.add_argument('--n-samples', type=int, default=200, help="Number of collision configs to sample")
     parser.add_argument('--step-size', type=float, default=0.05, help="Step size for sampling")
     parser.add_argument('--K-sampling', type=int, default=50, help="Number of candidates per step")
     parser.add_argument('--max-steps', type=int, default=100, help="Maximum steps for escape")
-    parser.add_argument('--safety-margin', type=float, default=0.02, help="NDF threshold for escape")
+    parser.add_argument('--safety-margin', type=float, default=0.0, help="NDF threshold for escape")
     parser.add_argument('--output-dir', default='output/sampling', help="Output directory")
     args = parser.parse_args()
 

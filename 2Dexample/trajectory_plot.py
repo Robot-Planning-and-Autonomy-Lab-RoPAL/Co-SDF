@@ -175,7 +175,7 @@ def render_gif(path_file, world_file, gif_file, nx, fps, shadows):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="2D path GIF renderer (arm-style)")
     parser.add_argument("--path", type=str, default="output/traj/rrt.npy", help="Path .npy file (T,2)")
-    parser.add_argument("--world", type=str, default="config/block_world5.yaml", help="YAML world file")
+    parser.add_argument("--world", type=str, default="config/block_world1.yaml", help="YAML world file")
     parser.add_argument("--gif-out", type=str, default="output/rrt.gif", help="Output GIF path")
     parser.add_argument("--gif-nx", type=int, default=201, help="Config-space resolution for GIF background")
     parser.add_argument("--fps", type=int, default=15, help="GIF frames per second")

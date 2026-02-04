@@ -124,6 +124,7 @@ venv.bak/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+.l4c_cache
 
 # Pyre type checker
 .pyre/
@@ -163,3 +164,6 @@ logs/
 checkpoints/
 results/
 inputs/
+legacy
+_l4c_generated/
+_.l4c_cache/

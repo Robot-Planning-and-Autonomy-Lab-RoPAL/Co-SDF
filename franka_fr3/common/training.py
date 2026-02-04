@@ -96,7 +96,7 @@ class Trainer(M.Logger):
                 Y_in = model(points_in)
                 Y_out = model(points_out)
                 
-                # Standard HKR loss (no weights)
+                # Apply safety weight to X_in samples if specified
                 batch_loss_hkr = torch.sum(lossfun_hkr(-Y_in) + lossfun_hkr(Y_out))
                 total_batch_loss = batch_loss_hkr
                 

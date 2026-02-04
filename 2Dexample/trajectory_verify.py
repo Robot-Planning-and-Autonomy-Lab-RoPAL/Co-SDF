@@ -69,7 +69,7 @@ def verify_trajectory(path_file: str, world_file: str, interp_steps: int = 0) ->
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="2D path collision verifier")
-    parser.add_argument("--path", default="output/optim.npy", help="Path .npy file (T,2)")
+    parser.add_argument("--path", default="output/traj/optim.npy", help="Path .npy file (T,2)")
     parser.add_argument("--world", default="config/block_world5.yaml", help="YAML world file")
     parser.add_argument("--interp", type=int, default=10, help="Interpolation steps per segment")
     args = parser.parse_args()

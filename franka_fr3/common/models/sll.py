@@ -5,10 +5,8 @@ import torch.nn.functional as F
 from deel import torchlip
 
 def safe_inv(x):
-    mask = x == 0
-    x_inv = x ** (-1)
-    x_inv[mask] = 0
-    return x_inv
+    # Functional version (no in-place mutation) for L4CasADi compatibility
+    return torch.where(x != 0, x ** (-1), torch.zeros_like(x))
 
 class SDPBasedLipschitzDense(nn.Module):
 

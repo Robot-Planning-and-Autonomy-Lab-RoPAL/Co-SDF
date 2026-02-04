@@ -6,46 +6,49 @@ import numpy as np
 import torch
 import torch.nn as nn
 import matplotlib
-matplotlib.use('Agg')  # 使用非交互式后端，避免 X11 错误
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 from scipy.stats import spearmanr
 from sklearn.metrics import f1_score, confusion_matrix
-
+import random
 import robot_tools
 import cspace_sdf
-from common.models import select_model
-
 from common.models import load_model as global_load_model
+from common.utils import get_device
 
-def load_2d_model(path, device, n_layers=20, n_hidden=128):
-    # Standard G-NDF loading (Functional Sequential)
-    return global_load_model(path, device)
-
-def get_device():
+def seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
     if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+def load_model(path, device, n_layers, n_hidden):
+    return global_load_model(path, device)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-path', default='output/block_world20/model_final.pt', help="Path to the NDF model")
-    parser.add_argument('--world-file', default='config/block_world20.yaml', help="World YAML file")
+    parser.add_argument('--model-path', default='output/block_world5/model_final.pt', help="Path to the NDF model")
+    parser.add_argument('--world-file', default='config/block_world5.yaml', help="World YAML file")
     parser.add_argument('--n-samples', type=int, default=2000, help="Number of random samples for correlation")
+    parser.add_argument('--seed', type=int, default=42, help="Random seed")
     parser.add_argument('--grid-res', type=int, default=128, help="Resolution for GT SDF calculation")
     parser.add_argument('--bound-limit', type=float, default=0.5, help="Distance range (rad) for correlation analysis")
     parser.add_argument('--output-dir', default='output/correlation', help="Output directory for results")
-    parser.add_argument('--n-layers', type=int, default=20, help="NDF layers")
-    parser.add_argument('--n-hidden', type=int, default=128, help="NDF hidden units")
+    parser.add_argument('--n-layers', type=int, default=5, help="NDF layers")
+    parser.add_argument('--n-hidden', type=int, default=256, help="NDF hidden units")
     args = parser.parse_args()
+
+    seed(args.seed)
 
     device = get_device()
     print(f"\nEvaluating 2D NDF Correlation on {device}...")
     
-
     print(f"Loading world: {args.world_file}")
     problem = robot_tools.PlanningProblem(args.world_file)
     
@@ -53,7 +56,7 @@ if __name__ == "__main__":
     theta, c_space = problem.construct_config_space(nx=args.grid_res)
     theta_periodic, sdf_grid = cspace_sdf.cobs_sdf_on_torus(theta, c_space)
     
-    model = load_2d_model(args.model_path, device, n_layers=args.n_layers, n_hidden=args.n_hidden)
+    model = load_model(args.model_path, device, n_layers=args.n_layers, n_hidden=args.n_hidden)
     
     print(f"Sampling {args.n_samples} points...")
     qs = np.random.uniform(0, 2*np.pi, (args.n_samples, 2))
@@ -115,7 +118,7 @@ if __name__ == "__main__":
     plt.axvline(0, color='k', linestyle='-', alpha=0.3)
     plt.xlabel("Ground Truth C-Space SDF (rad)")
     plt.ylabel("NDF Prediction")
-    plt.title(f"NDF vs. Ground-Truth C-space SDF (2D Block World)")
+    plt.title(f"NDF vs. Ground-Truth C-space SDF (2D Block World) \nSpearman Correlation: {corr:.4f}")
     plt.legend()
     plt.tight_layout()
     

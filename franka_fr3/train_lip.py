@@ -21,8 +21,8 @@ if __name__ == "__main__":
         description="This scripts runs the training optimization of a 1-Lipschitz neural network on some precomputed point cloud dataset."
     )
     parser.add_argument("--dataset", type=str, default="fr3", help="prefix of dataset files, e.g. 'block_world'")
-    parser.add_argument("--data", type=str, default="inputs/bookshelf")
-    parser.add_argument("-o", "--output-name", type=str, default="bookshelf")
+    parser.add_argument("--data", type=str, default="inputs/table_obs10", help="folder where the dataset files are stored")
+    parser.add_argument("-o", "--output-name", type=str, default="table_obs10", help="name of the output folder inside 'output/'")
     parser.add_argument("--unsigned", action="store_true", help="flag for training an unsigned distance field instead of a signed one")
     
     # model parameters
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     parser.add_argument("-lmbd", "--loss-lambda", type=float, default=100., help="lambda in the hKR loss")
     parser.add_argument("--eikonal-weight", type=float, default=0.1, help="Weight for Eikonal regularization")
     parser.add_argument("--eikonal-target", type=float, default=1.0, help="Target gradient norm for Eikonal loss")
-    parser.add_argument("--eikonal-normalize-scale", type=float, default=1.0, help="Scale factor to normalize gradient norm (default 1.0)")
+    parser.add_argument("--eikonal-normalize-scale", type=str, default="auto", help="Scale factor to normalize gradient norm (default 'auto' extracts from model)")
     parser.add_argument("--n-points-per-link", type=int, default=1, help="Number of control points per link for G-NDF")
     
     parser.add_argument("-cp", "--checkpoint-freq", type=int, default=10, help="Number of epochs between each model save")
@@ -143,6 +143,34 @@ if __name__ == "__main__":
             print(f"Resumed from {args.resume}")
         except Exception as e:
             print(f"Error loading checkpoint {args.resume}: {e}")
+
+    if args.resume:
+        # ... (keep existing resume logic)
+        pass
+
+    # Automatic Eikonal scaling extraction
+    if config.eikonal_weight > 0:
+        if args.eikonal_normalize_scale == "auto":
+            # Extract from model's preprocessing layer if possible
+            # For G-NDF Sequential, it's model[0].xyz_std
+            preprocess = None
+            if isinstance(model, nn.Sequential):
+                preprocess = model[0]
+            elif hasattr(model, "preprocess"):
+                preprocess = model.preprocess
+            
+            if preprocess is not None and hasattr(preprocess, "xyz_std"):
+                config.eikonal_normalize_scale = preprocess.xyz_std.item()
+                print(f"AUTO-EIKONAL: Extracted scale {config.eikonal_normalize_scale:.4f} from model statistics.")
+            else:
+                config.eikonal_normalize_scale = 1.0
+                print("AUTO-EIKONAL: Warning: Could not extract xyz_std from model. Defaulting to 1.0.")
+        else:
+            try:
+                config.eikonal_normalize_scale = float(args.eikonal_normalize_scale)
+            except ValueError:
+                config.eikonal_normalize_scale = 1.0
+                print(f"AUTO-EIKONAL: Warning: Invalid scale '{args.eikonal_normalize_scale}'. Defaulting to 1.0.")
 
     print("PARAMETERS:", count_parameters(model))
 

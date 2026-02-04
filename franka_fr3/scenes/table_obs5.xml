@@ -24,23 +24,17 @@
     <geom name="floor" size="0 0 0.05" type="plane" pos="0 0 -0.8" material="groundplane"/>
 
     <!-- Large Table for robot and obstacles (robot at 0,0,0) -->
-    <!-- Robot sits at z=0. Table top is at z=0. 
-         Table box center at z=-0.02 (thickness 0.04). -->
     <geom name="table_surface" type="box" size="0.6 0.8 0.02" pos="0.3 0 -0.02" material="table_mat"/>
     
-    <!-- Legs for visuals 
-         Table bottom at -0.04. Floor at -0.8. 
-         Leg height = 0.76. Half-height = 0.38.
-         Leg center z = (-0.04 + -0.8) / 2 = -0.42. -->
+    <!-- Legs for visuals -->
     <geom name="table_leg1" type="cylinder" size="0.04 0.38" pos="-0.25 -0.75 -0.42" rgba="0.4 0.3 0.2 1"/>
     <geom name="table_leg2" type="cylinder" size="0.04 0.38" pos="0.85 -0.75 -0.42" rgba="0.4 0.3 0.2 1"/>
     <geom name="table_leg3" type="cylinder" size="0.04 0.38" pos="-0.25 0.75 -0.42" rgba="0.4 0.3 0.2 1"/>
     <geom name="table_leg4" type="cylinder" size="0.04 0.38" pos="0.85 0.75 -0.42" rgba="0.4 0.3 0.2 1"/>
-
-    <geom name="obs_0" type="sphere" size="0.033" pos="0.661 0.428 0.033" rgba="0.45 0.70 0.76 1.00"/>
-    <geom name="obs_1" type="box" size="0.039 0.032 0.041" pos="0.346 -0.244 0.041" rgba="0.22 0.27 0.41 1.00"/>
-    <geom name="obs_2" type="sphere" size="0.049" pos="0.324 -0.328 0.049" rgba="0.84 0.39 0.39 1.00"/>
-    <geom name="obs_3" type="cylinder" size="0.049 0.036" pos="0.217 -0.638 0.036" rgba="0.80 0.69 0.59 1.00"/>
-    <geom name="obs_4" type="sphere" size="0.058" pos="0.383 -0.403 0.058" rgba="0.58 0.41 0.21 1.00"/>
+    <geom name="obs_0" type="sphere" size="0.067" pos="0.311 -0.226 0.067" rgba="0.45 0.70 0.76 1.00"/>
+    <geom name="obs_1" type="cylinder" size="0.073 0.073" pos="0.200 -0.085 0.073" rgba="0.22 0.27 0.41 1.00"/>
+    <geom name="obs_2" type="sphere" size="0.076" pos="0.260 0.148 0.076" rgba="0.84 0.39 0.39 1.00"/>
+    <geom name="obs_3" type="cylinder" size="0.084 0.084" pos="0.667 0.023 0.084" rgba="0.80 0.69 0.59 1.00"/>
+    <geom name="obs_4" type="cylinder" size="0.089 0.089" pos="0.544 -0.128 0.089" rgba="0.58 0.41 0.21 1.00"/>
   </worldbody>
 </mujoco>

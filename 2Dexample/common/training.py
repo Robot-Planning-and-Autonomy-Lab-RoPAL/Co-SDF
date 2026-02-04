@@ -73,6 +73,8 @@ class Trainer(M.Logger):
                 # forward + backward + optimize
                 Y_in = model(X_in[0]) # forward computation
                 Y_out = model(X_out[0])
+                
+                # Apply safety weight to X_in samples if specified
                 batch_loss_hkr = torch.sum(lossfun_hkr(-Y_in) + lossfun_hkr(Y_out))
                 total_batch_loss = batch_loss_hkr
 
@@ -84,7 +86,9 @@ class Trainer(M.Logger):
                     grad = torch.autograd.grad(Y_mix, X_mix, grad_outputs=torch.ones_like(Y_mix), create_graph=True)[0]
                     grad_q = grad[:, :2]
                     grad_norm = grad_q.norm(dim=-1)
-                    batch_loss_eik = self.config.eikonal_weight * F.mse_loss(grad_norm, torch.ones_like(grad_norm))
+                    
+                    eik_scale = getattr(self.config, "eikonal_normalize_scale", 1.0)
+                    batch_loss_eik = self.config.eikonal_weight * F.mse_loss(grad_norm / eik_scale, torch.ones_like(grad_norm))
                     total_batch_loss += batch_loss_eik
                     train_loss["eik"] += float(batch_loss_eik.detach())
 

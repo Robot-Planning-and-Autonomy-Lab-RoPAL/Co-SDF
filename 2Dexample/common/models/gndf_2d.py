@@ -27,6 +27,8 @@ class GNDF_Preprocessing_2D(nn.Module):
             n_points_per_link=n_points_per_link,
             device=device
         )
+        # Scale factor for normalization (mirrors 3D version's xyz_std)
+        self.register_buffer('xyz_std', torch.tensor(5.0))
         
     def forward(self, x):
         if x.shape[1] == 2:
@@ -35,13 +37,13 @@ class GNDF_Preprocessing_2D(nn.Module):
             points = self.cp_manager.get_control_points(q)
             points_flat = points.reshape(q.shape[0], -1)
             # Normalize physical points: (x-5)/5 -> [-1, 1]
-            points_norm = (points_flat - 5.0) / 5.0
+            points_norm = (points_flat - 5.0) / self.xyz_std
             # Return ONLY workspace features (xyz)
             return points_norm
         else:
             # Training: input is [q, xyz] (B, 2 + N*2)
             q, points_raw = x[:, :2], x[:, 2:]
-            points_norm = (points_raw - 5.0) / 5.0
+            points_norm = (points_raw - 5.0) / self.xyz_std
             # Return ONLY workspace features (xyz)
             return points_norm
 

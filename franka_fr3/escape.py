@@ -12,156 +12,204 @@ class Escape:
         self.device = device
         self.model = load_model(model_path, device)
         self.model.eval()
-        
-        abs_xml = os.path.abspath(scene_xml)
-        self.mj_model = mujoco.MjModel.from_xml_path(abs_xml)
+        self.scene_xml = os.path.abspath(scene_xml)
+        self.mj_model = mujoco.MjModel.from_xml_path(self.scene_xml)
         self.mj_data = mujoco.MjData(self.mj_model)
         
-        self.robot_body_ids = set()
-        base_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "base")
-        for i in range(self.mj_model.nbody):
-            curr = i
-            while curr > 0:
-                if curr == base_id:
-                    self.robot_body_ids.add(i)
-                    break
-                curr = self.mj_model.body_parentid[curr]
-        self.is_robot_body = np.zeros(self.mj_model.nbody, dtype=bool)
-        if self.robot_body_ids:
-            self.is_robot_body[list(self.robot_body_ids)] = True
+        # 1. Standard Initial State (qpos0)
+        mujoco.mj_resetData(self.mj_model, self.mj_data)
+        if self.mj_model.nkey > 0:
+            self.qpos0 = self.mj_model.key_qpos[0].copy()
+        else:
+            self.qpos0 = self.mj_data.qpos.copy()
+        
+        # 2. Precise Joint Indexing (Arm 1-7)
+        joint_names = [f"fr3_joint{i}" for i in range(1, 8)]
+        self.q_idx = []
+        self.q_lo = []
+        self.q_hi = []
+        for name in joint_names:
+            jid = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            if jid == -1:
+                available_joints = [self.mj_model.joint(i).name for i in range(self.mj_model.njnt)]
+                raise ValueError(f"Joint '{name}' not found! Available joints: {available_joints}")
+            self.q_idx.append(self.mj_model.jnt_qposadr[jid])
+            self.q_lo.append(self.mj_model.jnt_range[jid][0])
+            self.q_hi.append(self.mj_model.jnt_range[jid][1])
+        self.q_idx = np.array(self.q_idx)
+        self.q_lo = np.array(self.q_lo)
+        self.q_hi = np.array(self.q_hi)
 
-    def check_collision(self, q):
-        self.mj_data.qpos[:7] = q
-        if self.mj_model.nq > 7:
-            self.mj_data.qpos[7:self.mj_model.nq] = 0.04
+        # 3. Dynamic Finger Identification
+        self.finger_q_idx = []
+        self.finger_open_val = []
+        for name in ["finger_joint1", "finger_joint2"]:
+            jid = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            if jid != -1 and self.mj_model.jnt_type[jid] == mujoco.mjtJoint.mjJNT_SLIDE:
+                self.finger_q_idx.append(self.mj_model.jnt_qposadr[jid])
+                self.finger_open_val.append(self.mj_model.jnt_range[jid][1])
+        print(f"DEBUG: Precisely identified {len(self.finger_q_idx)} gripper sliders.")
+
+        # 4. Tree-based Robot Body Identification
+        base_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "base")
+        if base_id == -1: base_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "fr3_link0")
+        
+        self.robot_body_ids = set()
+        def collect_children(bid):
+            self.robot_body_ids.add(bid)
+            for i in range(self.mj_model.nbody):
+                if self.mj_model.body_parentid[i] == bid and i != bid:
+                    collect_children(i)
+        if base_id != -1: collect_children(base_id)
+        
+        self.is_robot_body = np.zeros(self.mj_model.nbody, dtype=bool)
+        if self.robot_body_ids: self.is_robot_body[list(self.robot_body_ids)] = True
+            
+        from correlation import _init_gt_worker
+        indices = [i for i, b in enumerate(self.is_robot_body) if b]
+        _init_gt_worker(self.scene_xml, indices)
+
+    def _set_state(self, q):
+        mujoco.mj_resetData(self.mj_model, self.mj_data)
+        self.mj_data.qpos[:] = self.qpos0
+        self.mj_data.qpos[self.q_idx] = q
+        for adr, val in zip(self.finger_q_idx, self.finger_open_val):
+            self.mj_data.qpos[adr] = val
         mujoco.mj_forward(self.mj_model, self.mj_data)
+
+    def get_collision_status(self, q):
+        self._set_state(q)
+        for i in range(self.mj_data.ncon):
+            c = self.mj_data.contact[i]
+            b1, b2 = self.mj_model.geom_bodyid[c.geom1], self.mj_model.geom_bodyid[c.geom2]
+            if self.is_robot_body[b1] ^ self.is_robot_body[b2]: return True
+        return False
+
+    def get_detailed_info(self, q):
+        self._set_state(q)
+        is_coll = False
+        pairs = []
         for i in range(self.mj_data.ncon):
             c = self.mj_data.contact[i]
             b1, b2 = self.mj_model.geom_bodyid[c.geom1], self.mj_model.geom_bodyid[c.geom2]
             if self.is_robot_body[b1] ^ self.is_robot_body[b2]:
-                return True
-        return False
+                is_coll = True
+                pairs.append(f"{self.mj_model.body(b1).name}<->{self.mj_model.body(b2).name}")
+        from correlation import _worker_dist_approx
+        _, dist, _, _ = _worker_dist_approx(q)
+        return is_coll, dist, list(set(pairs))
 
-    def find_near_boundary_collision(self):
-
-        lo, hi = self.mj_model.jnt_range[:7, 0], self.mj_model.jnt_range[:7, 1]
+    def find_collision_q(self):
         while True:
-            q1 = lo + np.random.rand(7) * (hi - lo)
-            c1 = self.check_collision(q1)
-            q2 = np.clip(q1 + np.random.randn(7) * 0.15, lo, hi)
-            c2 = self.check_collision(q2)
-            
-            if c1 != c2:
-                q_coll, q_free = (q1, q2) if c1 else (q2, q1)
-                for _ in range(5):
-                    mid = (q_coll + q_free) / 2
-                    if self.check_collision(mid): q_coll = mid
-                    else: q_free = mid
-                return q_coll
+            q = self.q_lo + np.random.rand(7) * (self.q_hi - self.q_lo)
+            if self.get_collision_status(q): return q
 
-    def run_escape(self, q0, lr=0.1, max_steps=100, safety_margin=0.02):
-        q_curr = torch.tensor(q0, dtype=torch.float32, device=self.device, requires_grad=True)
-        lo_t = torch.from_numpy(self.mj_model.jnt_range[:7, 0]).float().to(self.device)
-        hi_t = torch.from_numpy(self.mj_model.jnt_range[:7, 1]).float().to(self.device)
+    def optim_escape(self, start_cfg, lr=0.05, safety_margin=0.02, max_steps=100):
+        t_start = time.time()
+        q_lo_t = torch.from_numpy(self.q_lo).float().to(self.device)
+        q_hi_t = torch.from_numpy(self.q_hi).float().to(self.device)
+        q = torch.tensor(start_cfg, dtype=torch.float32, device=self.device, requires_grad=True)
+        optimizer = torch.optim.Adam([q], lr=lr)
         
-        trajectory = [q0.copy()]
-        gt_success_step = None
-        ndf_success_step = None
+        cfg_history = [start_cfg.copy()]
+        ndf_history = []
+        success = False
+        joint_weights = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.2, 1.5, 1.5], device=self.device)
         
         for step in range(max_steps):
-            ndf_val = self.model(q_curr.unsqueeze(0)).squeeze()
+            optimizer.zero_grad()
+            ndf_val = self.model(q.unsqueeze(0)).squeeze()
+            ndf_history.append(ndf_val.item())
             
-            if gt_success_step is None and not self.check_collision(q_curr.detach().cpu().numpy()):
-                gt_success_step = step
-            
-            if ndf_success_step is None and ndf_val.item() >= safety_margin:
-                ndf_success_step = step
-            
-            if gt_success_step is not None and ndf_success_step is not None:
+            if ndf_val.item() >= safety_margin:
+                success = True
+                cfg_history.append(q.detach().cpu().numpy().copy())
                 break
-
-            loss = torch.nn.functional.relu(safety_margin - ndf_val)
             
-            if q_curr.grad is not None: q_curr.grad.zero_()
+            loss = torch.nn.functional.relu(safety_margin - ndf_val)
             loss.backward()
             
-            grad = q_curr.grad.data.clone()
-            grad_norm = grad.norm().item()
+            with torch.no_grad():
+                q.grad.mul_(joint_weights)
+            optimizer.step()
             
-            if grad_norm < 1e-9:
-                break
+            with torch.no_grad():
+                if step >= 10:
+                    recent_avg = np.mean(ndf_history[-5:])
+                    prev_avg = np.mean(ndf_history[-10:-5]) if len(ndf_history) >= 10 else ndf_history[0]
+                    # More sensitive: 1e-4 instead of 5e-5
+                    if abs(recent_avg - prev_avg) < 1e-4:
+                        q.add_(torch.randn_like(q) * 0.01) # Bigger kick
+                q.clamp_(q_lo_t, q_hi_t)
             
-            q_orig = q_curr.detach().clone()
-            v_orig = loss.item()
-            alpha = lr
-            step_taken = False
+            cfg_history.append(q.detach().cpu().numpy().copy())
             
-            for _ in range(6):
-                q_next = torch.clamp(q_orig - alpha * grad, lo_t, hi_t)
-                
-                with torch.no_grad():
-                    v_next = torch.nn.functional.relu(safety_margin - self.model(q_next.unsqueeze(0)).squeeze()).item()
-                    if v_next < v_orig:
-                        q_curr.data = q_next
-                        step_taken = True
-                        break
-                alpha *= 0.5
+        t_escape = time.time() - t_start
+        return np.array(cfg_history), success, step + 1, t_escape
+
+def set_seed(seed):
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+def run_analysis(args):
+    set_seed(args.seed)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    esc_tool = Escape(args.model, args.scene, device)
+    print(f"Sampling {args.samples} collision points...")
+    seeds = [esc_tool.find_collision_q() for _ in tqdm(range(args.samples))]
+    
+    ndf_success_count = 0
+    gt_actually_safe_count = 0
+    strict_success_count = 0
+    total_steps = 0
+    total_time = 0
+    
+    print(f"\nRunning Adam Escape (LR: {args.lr}, Target: {args.safety_margin})...")
+    for i in tqdm(range(args.samples), desc="Escaping"):
+        q0 = seeds[i]
+        history, ndf_success, steps, dt = esc_tool.optim_escape(q0, lr=args.lr, safety_margin=args.safety_margin, max_steps=args.max_steps)
+        final_q = history[-1]
+        
+        gt_is_coll = esc_tool.get_collision_status(final_q)
+        
+        if ndf_success: ndf_success_count += 1
+        if not gt_is_coll: gt_actually_safe_count += 1
+        
+        if ndf_success and not gt_is_coll:
+            strict_success_count += 1
+            total_steps += steps
+            total_time += dt
+            status = "SUCCESS"
+        else: status = "FAILED "
+        
+        if i < 15:
+            _, dist, _ = esc_tool.get_detailed_info(final_q)
+            print(f"ID {i:2} | {status} | Steps: {steps:2} | Time: {dt*1000:.1f}ms | GT_Dist: {dist:.4f} | Final_NDF: {esc_tool.model(torch.from_numpy(final_q).float().to(device).unsqueeze(0)).item():.4f}")
             
-            if not step_taken:
-                break
-                
-            trajectory.append(q_curr.detach().cpu().numpy().copy())
-            
-        return {
-            "ndf_success": ndf_success_step is not None,
-            "gt_success": gt_success_step is not None,
-            "gt_steps": gt_success_step if gt_success_step is not None else step,
-            "ndf_steps": ndf_success_step if ndf_success_step is not None else step,
-            "trajectory": np.array(trajectory),
-            "final_grad_norm": grad_norm
-        }
+    print(f"\n" + "="*60 + "\nADAM ESCAPE PERFORMANCE (27D Midpoint - Optimized)\n" + "="*60)
+    print(f"Total Samples: {args.samples}")
+    print(f"NDF Perceived SR: {ndf_success_count/args.samples*100:.1f}%")
+    print(f"GT Physical SR:   {gt_actually_safe_count/args.samples*100:.1f}%")
+    print(f"Strict Success:   {strict_success_count/args.samples*100:.1f}%")
+    if strict_success_count > 0:
+        print(f"Avg Steps:        {total_steps/strict_success_count:.1f}")
+        print(f"Avg Time:         {total_time/args.samples*1000:.2f} ms")
+        print(f"Avg Step Time:    {total_time/total_steps*1000:.2f} ms")
+    print("="*60 + "\n")
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="output/bookshelf/model_final.pt", help="Path to NDF model")
-    parser.add_argument("--scene", default="scenes/bookshelf.xml", help="Path to scene")
-    parser.add_argument("--samples", type=int, default=200, help="Number of samples")
-    parser.add_argument("--lr", type=float, default=0.05, help="Learning rate")
-    parser.add_argument("--max-steps", type=int, default=100, help="Max escape steps")
-    parser.add_argument("--safety-margin", type=float, default=0.02, help="NDF safety margin")
+    parser.add_argument("--model", default="output/table_obs20/model_final.pt")
+    parser.add_argument("--scene", default="scenes/table_obs20.xml")
+    parser.add_argument("--samples", type=int, default=200)
+    parser.add_argument("--lr", type=float, default=0.07)
+    parser.add_argument("--max_steps", type=int, default=100)
+    parser.add_argument("--safety_margin", type=float, default=0.02)
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-    
-    escape_tool = Escape(args.model, args.scene)
-    
-    print(f"Sampling {args.samples} near-boundary collision points...")
-    collision_points = []
-    for _ in tqdm(range(args.samples), desc="Boundary Sampling", ncols=80):
-        collision_points.append(escape_tool.find_near_boundary_collision())
-    
-    results = []
-    t0 = time.time()
-    for q in tqdm(collision_points, desc="Escaping", ncols=80):
-        res = escape_tool.run_escape(q, lr=args.lr, max_steps=args.max_steps, safety_margin=args.safety_margin)
-        results.append(res)
-    total_time = time.time() - t0
-        
-    ndf_succ = [r['ndf_success'] for r in results]
-    gt_succ = [r['gt_success'] for r in results]
-    gt_steps = [r['gt_steps'] for r in results if r['gt_success']]
-    ndf_steps = [r['ndf_steps'] for r in results if r['ndf_success']]
-    
-    print(f"\n{'='*65}")
-    print(f"NDF GRADIENT ESCAPE (7D Franka - Intensive Refined)")
-    print(f"{'='*65}")
-    print(f"Total Samples:    {len(results)}")
-    print(f"Goal Condition:   not check_collision(q)")
-    print(f"Hinge Loss:       relu(m - f)")
-    print(f"Grad Norm Cutoff: 1e-8")
-    print(f"-----------------------------------------------------------------")
-    print(f"GT Success Rate:  {np.mean(gt_succ)*100:.1f}% (NO COLLISION)")
-    print(f"NDF Success Rate: {np.mean(ndf_succ)*100:.1f}% (NDF >= {args.safety_margin})")
-    print(f"Avg Steps to GT:  {np.mean(gt_steps):.1f}" if gt_steps else "Avg Steps to GT: N/A")
-    print(f"Avg Steps to NDF: {np.mean(ndf_steps):.1f}" if ndf_steps else "Avg Steps to NDF: N/A")
-    print(f"Avg Time/Sample:  {total_time/len(results)*1000:.1f} ms")
-    print(f"{'='*65}\n")
+    run_analysis(args)

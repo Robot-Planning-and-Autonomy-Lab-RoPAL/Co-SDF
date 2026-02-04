@@ -12,5 +12,5 @@ workspace:
     obstacles:
       - type: Circle
         parameters:
-          center: [3.0, 4.0]
-          radius: 1.5
+          center: [3.0, 3.0]
+          radius: 1.0

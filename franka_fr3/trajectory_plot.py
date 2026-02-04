@@ -87,7 +87,7 @@ def render_trajectory_gif(path_file, scene_xml, output_file, fps=30, width=640, 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Render Franka trajectory as GIF/MP4")
     parser.add_argument("--path", default="output/traj/rrt.npy", help="Path .npy file (T,7)")
-    parser.add_argument("--scene", default="scenes/bookshelf.xml", help="Scene XML file")
+    parser.add_argument("--scene", default="scenes/table_obs20.xml", help="Scene XML file")
     parser.add_argument("--output-far", default="output/traj/rrt_far.gif", help="Output file for far view")
     parser.add_argument("--output-front", default="output/traj/rrt_front.gif", help="Output file for front view")
     parser.add_argument("--fps", type=int, default=20, help="Frames per second (default: 20)")

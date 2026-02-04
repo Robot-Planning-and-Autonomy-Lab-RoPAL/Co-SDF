@@ -128,6 +128,45 @@ class Polygon(PointList):
                         wn -= 1  # have  a valid down intersect
         return wn
 
+    def distance(self, other):
+        """Compute minimum euclidean distance to another implementation-agnostic 2D object."""
+        # 0. If intersecting, distance is 0
+        if self.intersect(other):
+            return 0.0
+
+        # Handle object conversion
+        if not isinstance(other, Polygon):
+            if hasattr(other, "to_polygon"):
+                other = other.to_polygon()
+            else:
+                raise TypeError("distance() expects a Polygon or object with to_polygon()")
+
+        # 1. Point-to-Segment distance helper
+        def p_to_seg_dist_sq(p, a, b):
+            ab = (b.x - a.x, b.y - a.y)
+            ap = (p.x - a.x, p.y - a.y)
+            l2 = ab[0]**2 + ab[1]**2
+            if l2 == 0: return ap[0]**2 + ap[1]**2
+            t = max(0, min(1, (ap[0]*ab[0] + ap[1]*ab[1]) / l2))
+            proj = (a.x + t*ab[0], a.y + t*ab[1])
+            return (p.x - proj[0])**2 + (p.y - proj[1])**2
+
+        min_dist_sq = float('inf')
+
+        # 2. Check all points of self against all edges of other
+        for p in self:
+            for v0, v1 in other.edges():
+                d2 = p_to_seg_dist_sq(p, v0, v1)
+                if d2 < min_dist_sq: min_dist_sq = d2
+
+        # 3. Check all points of other against all edges of self
+        for p in other:
+            for v0, v1 in self.edges():
+                d2 = p_to_seg_dist_sq(p, v0, v1)
+                if d2 < min_dist_sq: min_dist_sq = d2
+
+        return math.sqrt(min_dist_sq)
+
     def intersect(self, poly2):
         # 允许 Circle 等其它形状先 to_polygon 再检测
         if not isinstance(poly2, Polygon):
@@ -319,44 +358,8 @@ class Circle:
         return (dx * dx + dy * dy) <= (self.radius * self.radius)
     
     def intersect(self, poly2):
-        # 允许其它形状（如 Circle）通过 to_polygon() 转换后再做相交检测
-        if not isinstance(poly2, Polygon):
-            if hasattr(poly2, "to_polygon"):
-                poly2 = poly2.to_polygon()  # 可传 n=64/96/128 控制精度
-            else:
-                raise TypeError("intersect() expects a Polygon or an object with to_polygon().")
-                
-        bounds1 = self.get_bounds()
-        bounds2 = poly2.get_bounds()
-        
-        if (bounds2[1] <= bounds1[0] or bounds2[0] >= bounds1[1] or
-            bounds2[3] <= bounds1[2] or bounds2[2] >= bounds1[3]):
-            return False
-    
-        for p in poly2:
-            if self.point_inside(p):  # winding number 非0即真
-                return True
-        for p in self:
-            if poly2.point_inside(p):
-                return True
-            
-        def add_ordered_edges(edge_list, new_edges):
-            for p0, p1 in new_edges:
-                if p0 < p1:
-                    edge_list.append(OrderedEdge(p0, p1))
-                else:
-                    edge_list.append(OrderedEdge(p1, p0))
-                    
-        my_edges = []
-        add_ordered_edges(my_edges, self.edges())
-        your_edges = []
-        add_ordered_edges(your_edges, poly2.edges())
-    
-        for e1 in my_edges:
-            for e2 in your_edges:
-                if line_intersect(e1, e2):
-                    return True
-        return False
+        # Delegate to Polygon's intersect which handles circle conversion robustly
+        return poly2.intersect(self)
     
     def to_polygon(self, n=64):
         """
