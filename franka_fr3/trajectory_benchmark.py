@@ -1,233 +1,203 @@
 #!/usr/bin/env python3
 import os
-import argparse
-import sys
-import numpy as np
-import torch
 import json
 import time
+import torch
 import random
-from tqdm import tqdm
+import argparse
+import numpy as np
 from rrt import RRT
 from common.utils import get_device
-from trajectory_optim import NDFOptimizerFranka
+from ndf_casadi import CasADiPlanner
+from sdf_planner import WorkspaceSDFPlanner
+from trajectory_verify import TrajectoryEvaluator
 
-def set_seed(seed):
-    random.seed(seed)
+def set_all_seeds(seed):
     np.random.seed(seed)
+    random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
-def generate_collision_free_configs(planner, num_configs=20, min_distance=1.0, max_attempts=500):
-    pairs = []
-    # Joint limits
-    # Note: planner.mj_model might be needed. RRT wrapper in rrt.py usually has self.model or self.env
-    # But NDFOptimizerFranka has MJ model.
-    # We can access joint limits from planner if planner exposes them, or pass them.
-    # 'planner' here is an instance of RRT.
-    # Let's assume we can get limits from the optimizer instance we'll create, or just hardcode/read from XML.
-    # But wait, generate_collision_free_configs was already fetching lo/hi from planner.mj_model in previous version.
+def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
+    if seed is not None:
+        set_all_seeds(seed)
+
+    scene = f"scenes/{world}.xml"
+    model = f"output/{world}/model_final.pt"
+    device = get_device()
+    device_str = str(device).split(':')[0]
+
+    print("\nInitializing Planners and Evaluator...")
+    ndf_planner = CasADiPlanner(model, scene, device=device_str)
+    sdf_planner = WorkspaceSDFPlanner(scene, grid_resolution=64, device=device_str)
+    evaluator = TrajectoryEvaluator(scene, model=ndf_planner.opt_base.model, device=device_str)
+    rrt_gen = RRT(scene)
+
+    methods = [("NDF", ndf_planner), ("SDF", sdf_planner)]
+    solvers = ["ipopt", "osqp", "qpoases"]
     
-    # In step 14, planner was RRT(args.scene...). RRT in 7d likely has .mj_model.
-    # Let's verify RRT structure if possible, OR just trust it works since it worked before.
-    # "lo, hi = planner.mj_model.jnt_range[:7, 0]..." was in step 14.
-    
-    lo, hi = planner.mj_model.jnt_range[:7, 0], planner.mj_model.jnt_range[:7, 1]
-    
-    pbar = tqdm(total=num_configs, desc="Generating")
-    
-    while len(pairs) < num_configs:
-        attempts = 0
-        while attempts < max_attempts:
-            start = lo + np.random.rand(7) * (hi - lo)
-            goal = lo + np.random.rand(7) * (hi - lo)
-            
-            dist = np.linalg.norm(goal - start)
-            if dist < min_distance:
-                attempts += 1
-                continue
-            
-            if planner.is_collision_free(start) and planner.is_collision_free(goal):
-                path = planner.plan(start, goal)
-                if path is not None:
-                    pairs.append((start.astype(np.float64), goal.astype(np.float64)))
-                    pbar.update(1)
-                    break
-            attempts += 1
+    results = {"RRT": []}
+    for m_name, _ in methods:
+        for s_name in solvers:
+            results[f"{m_name}-{s_name}"] = []
+
+    print(f"\n{'='*120}")
+    print(f"BENCHMARK: {world.upper()} | {samples} Samples | Methods: NDF, SDF | Solvers: {', '.join(solvers)}")
+    print(f"{'='*120}")
+
+    for i in range(samples):
+        if seed is not None:
+            set_all_seeds(seed + i)
+        print(f"\n[Sample {i+1}/{samples}] Generating RRT path... ", end="", flush=True)
+        rrt_start = time.perf_counter()
+        path_raw = rrt_gen.plan(output_file=None, timeout=10.0)
+        rrt_time = time.perf_counter() - rrt_start
+        if path_raw is None:
+            print("FAILED")
+            # Strictly use args.samples as denominator: record failure for all
+            results["RRT"].append({
+                "solve success": False, "gt success": False, 
+                "path length": 0.0, 
+                "min clearance": 0.0, 
+                "time": rrt_time
+            })
+            for m_name, _ in methods:
+                for s_name in solvers:
+                    results[f"{m_name}-{s_name}"].append({
+                        "solve success": False, "gt success": False,
+                        "path length": 0.0, 
+                        "min clearance": 0.0, 
+                        "time": 0.0
+                    })
+            continue
+        print("OK")
         
-        if attempts >= max_attempts:
-            break
+        # Evaluate RRT Baseline
+        print(f"  -> Evaluating RRT Baseline ... ", end="", flush=True)
+        ev_rrt = evaluator.evaluate(path_raw)
+        print(f"Done (Safe: {ev_rrt['success']})")
+        results["RRT"].append({
+            "solve success": True,
+            "gt success": ev_rrt["success"],
+            "path length": ev_rrt["path_length"],
+            "min clearance": ev_rrt["min_clearance"],
+            "time": rrt_time
+        })
+        
+        start, goal = path_raw[0], path_raw[-1]
+        
+        diffs = np.linalg.norm(path_raw[1:] - path_raw[:-1], axis=1)
+        cum_dist = np.concatenate(([0], np.cumsum(diffs)))
+        target_dist = np.linspace(0, cum_dist[-1], n_waypoints)
+        dim = path_raw.shape[1]
+        path_init = np.zeros((n_waypoints, dim))
+        for j in range(dim):
+            path_init[:, j] = np.interp(target_dist, cum_dist, path_raw[:, j])
             
-    pbar.close()
-    return pairs
+        for m_idx, (m_name, planner) in enumerate(methods):
+            for s_idx, s_name in enumerate(solvers):
+                key = f"{m_name}-{s_name}"
+                print(f"  -> Testing {key:<12} ... ", end="", flush=True)
+                if seed is not None:
+                    set_all_seeds(seed + i * 1000 + m_idx * 100 + s_idx)
+
+                try:
+                    solve_kwargs = dict(
+                        start=start,
+                        goal=goal,
+                        initial_path=path_init,
+                        solver=s_name,
+                        n_waypoints=n_waypoints,
+                        safety_margin=safety_margin,
+                        max_iter=max_iter,
+                        verbose=False
+                    )
+
+                    if m_name == "NDF":
+                        solve_kwargs["formulation"] = "hard"
+
+                    success, path_opt, t, _ = planner.solve(**solve_kwargs)
+                    ev = evaluator.evaluate(path_opt)
+                            
+                    print(f"Done (GT Safe: {ev['success']}, SolveOK: {success}, Time: {t:.2f}s)")
+                    results[key].append({
+                        "solve success": bool(success),
+                        "gt success": ev["success"],
+                        "path length": ev["path_length"],
+                        "min clearance": ev["min_clearance"],
+                        "time": t
+                    })
+                except Exception as e:
+                    print(f"CRASH: {e}")
+                    results[key].append({
+                        "solve success": False, "gt success": False,
+                        "path length": 0.0, 
+                        "min clearance": 0.0, 
+                        "time": 0.0
+                    })
+
+    # Summary Table
+    table_lines = []
+    def log_and_print(s):
+        print(s)
+        table_lines.append(s)
+
+    log_and_print(f"\n{'='*120}")
+    log_and_print(f"FINAL BENCHMARK SUMMARY (Scene: {world}, Samples: {samples})")
+    log_and_print(f"{'='*120}")
+    log_and_print(f"{'Method-Solver':<20} | {'Safe%':<8} | {'Avg Len':<10} | {'Avg Clr':<10} | {'Avg Time':<10}")
+    log_and_print(f"{'-'*120}")
+    
+    sorted_keys = ["RRT"] + sorted([k for k in results.keys() if k != "RRT"])
+    for key in sorted_keys:
+        data = results[key]
+        if not data:
+            log_and_print(f"{key:<20} | {'N/A':<8} | {'--':<10} | {'--':<10} | {'--':<10}")
+            continue
+        
+        # Use nanmean to avoid pollution from failed samples
+        sr = np.nanmean([float(d["gt success"]) for d in data]) * 100
+        avg_len = np.nanmean([d["path length"] for d in data])
+        avg_clr = np.nanmean([d["min clearance"] for d in data])
+        avg_time = np.nanmean([d["time"] for d in data])
+        
+        log_and_print(f"{key:<20} | {sr:>7.1f}% | {avg_len:>9.3f} | {avg_clr:>9.4f} | {avg_time:>9.2f}s")
+    
+    log_and_print(f"{'='*120}\n")
+
+    return results, "\n".join(table_lines)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="output/table_obs20/model_final.pt")
-    parser.add_argument("--scene", type=str, default="scenes/table_obs20.xml")
-    parser.add_argument("--num-cases", type=int, default=100, help="Number of test cases")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--safety-margin", type=float, default=0.02,help="Safety margin")
-    parser.add_argument("--max-iter", type=int, default=100,help="iterations")
-    parser.add_argument("--num-waypoints", type=int, default=20,help="waypoints")
-    parser.add_argument("--max-speed", type=float, default=0.3,help="Maximum speed")
-    parser.add_argument("--num-trials", type=int, default=3,help="Number of trials")
-    parser.add_argument("--smoothness-weight", type=float, default=1.0,help="Smoothness weight")
-    parser.add_argument("--smoothness-type", choices=["joint", "workspace"], default="workspace",help="Smoothness type")
-    parser.add_argument("--path-length-weight", type=float, default=0.01,help="Path length weight")
-    parser.add_argument("--ndf-pot-weight", type=float, default=0.1,help="NDF pot weight")
-    parser.add_argument("--collision-weight-adam", type=float, default=1000.0,help="Collision weight adam")
-    parser.add_argument("--lr", type=float, default=0.001,help="Learning rate")
-    parser.add_argument("--interp", type=int, default=1,help="Interpolation")
-    parser.add_argument("--min-dist", type=float, default=1.5,help="Minimum distance")
-    parser.add_argument("--all", action="store_true", help="Run all optimization methods")
+    parser = argparse.ArgumentParser(description="Multi-Solver Benchmark: NDF vs Workspace SDF")
+    parser.add_argument("--world", type=str, default="obs20", help="Scene name")
+    parser.add_argument("--samples", type=int, default=1, help="Number of RRT paths to test")
+    parser.add_argument("--seed", type=int, default=42, help="Base random seed")
+    parser.add_argument("--n_waypoints", type=int, default=30, help="Number of waypoints")
+    parser.add_argument("--safety_margin", type=float, default=0.02, help="Safety margin")
+    parser.add_argument("--max_iter", type=int, default=200, help="Max iterations per solve")
     args = parser.parse_args()
 
-    set_seed(args.seed)
+    results, summary_text = run_benchmark(
+        args.world,
+        args.samples,
+        args.seed,
+        args.n_waypoints,
+        args.safety_margin,
+        args.max_iter,
+    )
 
-    # Validate paths
-    if not os.path.exists(args.model) or not os.path.exists(args.scene):
-         print("Error: Model or scene file not found.")
-         sys.exit(1)
-
-    device = "cuda" if torch.cuda.is_available() else "cpu" # Default to cpu per optim, but let's see
-    # NDFOptimizerFranka forces CPU internally currently (line 22 of optim), but we can pass device.
-    
-    print(f"\n{'='*80}")
-    print("FRANKA 7D TRAJECTORY OPTIMIZATION BENCHMARK")
-    print(f"{'='*80}")
-    
-    # Initialize optimizer
-    opt = NDFOptimizerFranka(args.model, args.scene, device=device) 
-    
-    # Initialize RRT planner for ground truth generation
-    planner = RRT(args.scene)
-    
-    # Generate test cases
-    test_cases = generate_collision_free_configs(planner, num_configs=args.num_cases, min_distance=args.min_dist)
-    
-    results = {name: [] for name in ["RRT", "NDF Adam", "NDF SLSQP", "NDF COBYLA"]}
-    
-    for idx, (start, goal) in enumerate(tqdm(test_cases, desc="Benchmarking")):
-        # 1. RRT
-        success_rrt, path_rrt, solve_time_rrt = opt.optimize_rrt(start, goal)
-        if not success_rrt:
-            for name in results: results[name].append({"success": 0})
-            continue
-            
-        path_resampled = opt.resample_path(path_rrt, args.num_waypoints)
-        res_rrt = opt.evaluate_path(path_resampled, args.safety_margin, interp_steps=args.interp)
-        res_rrt["solve_time"] = solve_time_rrt
-        res_rrt["success"] = 1 # RRT found path implies success
-        res_rrt["start_config"] = start.tolist()
-        res_rrt["goal_config"] = goal.tolist()
-        results["RRT"].append(res_rrt)
-        
-        def run_and_log(name, func, **kwargs):
-            try:
-                success, path, metrics = func(path_rrt, **kwargs)
-                metrics["start_config"] = start.tolist()
-                metrics["goal_config"] = goal.tolist()
-                if not success:
-                    metrics["success"] = 0
-                results[name].append(metrics)
-            except Exception as e:
-                print(f"Error in {name}: {e}")
-                results[name].append({"success": 0})
-
-        if args.all:
-            run_and_log("NDF Adam", opt.optimize_adam, 
-                        num_waypoints=args.num_waypoints, safety_margin=args.safety_margin,
-                        max_iter=args.max_iter, num_trials=args.num_trials,
-                        collision_weight=args.collision_weight_adam, smoothness_weight=args.smoothness_weight,
-                        path_length_weight=args.path_length_weight, ndf_pot_weight=args.ndf_pot_weight,
-                        smoothness_type=args.smoothness_type, max_speed=args.max_speed,
-                        interp_steps=args.interp, lr=args.lr, verbose=False)
-
-        # 3. SLSQP (Always)
-        run_and_log("NDF SLSQP", opt.optimize,
-                    num_waypoints=args.num_waypoints, safety_margin=args.safety_margin,
-                    max_iter=args.max_iter, num_trials=args.num_trials,
-                    optimizer_method="SLSQP", smoothness_type=args.smoothness_type,
-                    smoothness_weight=args.smoothness_weight, 
-                    path_length_weight=args.path_length_weight,
-                    ndf_pot_weight=args.ndf_pot_weight,
-                    max_speed=args.max_speed,
-                    interp_steps=args.interp, verbose=True)
-
-        # 4. COBYLA (Selective)
-        if args.all:
-            run_and_log("NDF COBYLA", opt.optimize_gradient_free,
-                        num_waypoints=args.num_waypoints, safety_margin=args.safety_margin,
-                        max_iter=args.max_iter, num_trials=args.num_trials,
-                        optimizer_method="COBYLA", smoothness_type=args.smoothness_type,
-                        max_speed=args.max_speed, verbose=False)
-
-    # Aggregation
-    def aggregate(res_list):
-        if not res_list: return None
-        num_cases = len(res_list)
-        total_successes = [r for r in res_list if r.get('success', False)]
-        
-        success_rate = len(total_successes) / num_cases * 100
-        
-        if not total_successes:
-             return {
-                 "success_rate": success_rate,
-                 "num_cases": num_cases, 
-                 "num_success": 0
-             }
-        
-        return {
-            "success_rate": success_rate,
-            "path_length": np.mean([r['path_length'] for r in total_successes]),
-            "min_clearance": np.mean([r['min_clearance'] for r in total_successes]),
-            "solve_time": np.mean([r['solve_time'] for r in total_successes]),
-            "num_cases": num_cases,
-            "num_success": len(total_successes)
-        }
-
-    stats = {name: aggregate(res_list) for name, res_list in results.items()}
-    
-    print(f"\n{'='*120}")
-    print(f" BENCHMARK RESULTS (N={len(test_cases)}) | Margin={args.safety_margin}")
-    display_methods = ["RRT", "NDF SLSQP"]
-    if args.all:
-        display_methods = ["RRT", "NDF Adam", "NDF SLSQP", "NDF COBYLA"]
-    
-    print(f"{'='*120}")
-    print(f"{'Method':<20} | {'Success%':<10} | {'SolveT(s)':<12} | {'PathLen':<10} | {'MinClr':<10}")
-    print(f"{'-'*80}")
-    
-    for name in display_methods:
-        s = stats.get(name)
-        if s and s["num_success"] > 0:
-            print(f"{name:<20} | {s['success_rate']:<10.1f} | {s['solve_time']:<12.4f} | {s['path_length']:<10.3f} | {s['min_clearance']:<10.4f}")
-        elif s:
-            print(f"{name:<20} | {s['success_rate']:<10.1f} | {'N/A':<12} | {'N/A':<10} | {'N/A':<10}")
-        
-    print(f"{'='*120}\n")
-    
-    # Save results
     save_dir = "output/benchmark"
     os.makedirs(save_dir, exist_ok=True)
-    
-    world_name = os.path.splitext(os.path.basename(args.scene))[0]
-    details_path = os.path.join(save_dir, f"details_{world_name}_7d.json")
-    summary_path = os.path.join(save_dir, f"summary_{world_name}_7d.json")
-    
-    # Dump raw data
-    with open(details_path, "w") as f:
-        # Convert numpy types to native
-        def convert(o):
-            if isinstance(o, np.integer): return int(o)
-            if isinstance(o, np.floating): return float(o)
-            if isinstance(o, np.ndarray): return o.tolist()
-            return o
-        json.dump(results, f, indent=4, default=convert)
-        
-    with open(summary_path, "w") as f:
-         json.dump({"config": vars(args), "stats": stats}, f, indent=4)
+
+    # Save JSON for data analysis
+    json_path = os.path.join(save_dir, f"summary_{args.world}.json")
+    with open(json_path, "w") as f:
+        json.dump({"config": vars(args), "stats": results}, f, indent=4)
          
-    print(f"Saved results to {summary_path}")
+    # Save TXT for human reading
+    txt_path = os.path.join(save_dir, f"summary_{args.world}.txt")
+    with open(txt_path, "w") as f:
+        f.write(summary_text)
+
+    print(f"Saved results to:")
+    print(f"  - {json_path}")
+    print(f"  - {txt_path}")

@@ -20,33 +20,35 @@ if __name__ == "__main__":
         prog="Training of a 1-Lipschitz architecture",
         description="This scripts runs the training optimization of a 1-Lipschitz neural network on some precomputed point cloud dataset."
     )
-    parser.add_argument("--dataset", type=str, default="fr3", help="prefix of dataset files, e.g. 'block_world'")
-    parser.add_argument("--data", type=str, default="inputs/table_obs10", help="folder where the dataset files are stored")
-    parser.add_argument("-o", "--output-name", type=str, default="table_obs10", help="name of the output folder inside 'output/'")
+    parser.add_argument("--world", type=str, default="obs20", help="sence name")
     parser.add_argument("--unsigned", action="store_true", help="flag for training an unsigned distance field instead of a signed one")
     
     # model parameters
-    parser.add_argument("-model","--model", choices=["ortho", "sll", "gndf"], default="gndf", help="Which Lipschitz architecture to consider. 'SLL' is the one used in the paper. 'Ortho' is the Bjorck orthonormalization-based architecture of Anil et al. (2019). 'GNDF' uses FK-based geometric features.")
-    parser.add_argument("-n-layers", "--n-layers", type=int, default=20, help="number of layers in the network")
-    parser.add_argument("-n-hidden", "--n-hidden", type=int, default=512, help="size of the layers")
+    parser.add_argument("--model", choices=["sll", "gndf"], default="gndf", help="Which Lipschitz architecture to consider. 'SLL' is the one used in the paper. 'Ortho' is the Bjorck orthonormalization-based architecture of Anil et al. (2019). 'GNDF' uses FK-based geometric features.")
+    parser.add_argument("--n-layers", type=int, default=20, help="number of layers in the network")
+    parser.add_argument("--n-hidden", type=int, default=512, help="size of the layers")
     
     # optimization parameters
-    parser.add_argument("-ne", "--epochs", type=int, default=200, help="Number of training epochs")
-    parser.add_argument('-bs',"--batch-size", type=int, default=200, help="Train batch size")
-    parser.add_argument("-tbs", "--test-batch-size", type = int, default = 5000, help="Test batch size")
-    parser.add_argument("-lr", "--learning-rate", type=float, default=5e-4, help="Adam's learning rate")
-    parser.add_argument("-lm", "--loss-margin", type=float, default=1e-2, help="margin m in the hKR loss")
-    parser.add_argument("-lmbd", "--loss-lambda", type=float, default=100., help="lambda in the hKR loss")
+    parser.add_argument("--epochs", type=int, default=200, help="Number of training epochs")
+    parser.add_argument("--batch-size", type=int, default=200, help="Train batch size")
+    parser.add_argument("--test-batch-size", type = int, default = 5000, help="Test batch size")
+    parser.add_argument("--learning-rate", type=float, default=5e-4, help="Adam's learning rate")
+    parser.add_argument("--loss-margin", type=float, default=1e-2, help="margin m in the hKR loss")
+    parser.add_argument("--loss-lambda", type=float, default=100., help="lambda in the hKR loss")
     parser.add_argument("--eikonal-weight", type=float, default=0.1, help="Weight for Eikonal regularization")
     parser.add_argument("--eikonal-target", type=float, default=1.0, help="Target gradient norm for Eikonal loss")
     parser.add_argument("--eikonal-normalize-scale", type=str, default="auto", help="Scale factor to normalize gradient norm (default 'auto' extracts from model)")
     parser.add_argument("--n-points-per-link", type=int, default=1, help="Number of control points per link for G-NDF")
     
-    parser.add_argument("-cp", "--checkpoint-freq", type=int, default=10, help="Number of epochs between each model save")
-    parser.add_argument("-cpu", action="store_true", help="force training on CPU")
+    parser.add_argument("--checkpoint-freq", type=int, default=10, help="Number of epochs between each model save")
+    parser.add_argument("--cpu", action="store_true", help="force training on CPU")
     parser.add_argument("--resume", type=str, default=None, help="path to a model checkpoint to resume from (e.g. output/ndf/model_final.pt)")
 
     args = parser.parse_args()
+
+    dataset_prefix = "fr3"
+    data_dir = os.path.join("inputs", args.world)
+    output_dir = os.path.join("output", args.world)
 
     config = SimpleNamespace(
         signed = not args.unsigned,
@@ -62,20 +64,19 @@ if __name__ == "__main__":
         eikonal_weight = args.eikonal_weight,
         eikonal_target = args.eikonal_target,
         eikonal_normalize_scale = args.eikonal_normalize_scale,
-        output_folder = os.path.join("output", args.output_name if len(args.output_name)>0 else args.dataset)
+        output_folder = output_dir
     )
 
     os.makedirs(config.output_folder, exist_ok=True)
     print("DEVICE:", config.device)
 
     DIM : int = None
-    #### Load train set ####
-    if config.signed: # SIGNED MODE
-        X_train_in = np.load(os.path.join(args.data, f"{args.dataset}_Xtrain_in.npy"))
+    if config.signed:
+        X_train_in = np.load(os.path.join(data_dir, f"{dataset_prefix}_Xtrain_in.npy"))
         X_train_in = torch.Tensor(X_train_in).to(config.device)
         loader_in = DataLoader(TensorDataset(X_train_in), batch_size=config.batch_size, shuffle=True)
         
-        X_train_out = np.load(os.path.join(args.data, f"{args.dataset}_Xtrain_out.npy"))
+        X_train_out = np.load(os.path.join(data_dir, f"{dataset_prefix}_Xtrain_out.npy"))
         X_train_out = torch.Tensor(X_train_out).to(config.device)
         loader_out = DataLoader(TensorDataset(X_train_out), batch_size=config.batch_size, shuffle=True)
         
@@ -86,16 +87,14 @@ if __name__ == "__main__":
               f"Outside: {X_train_out.shape}")
         
         DIM = X_train_in.shape[1]
-    else: # UNSIGNED MODE
-        # Assuming Xtrain_on is the boundary points
+    else:
         try:
-            X_train_on = np.load(os.path.join(args.data, f"{args.dataset}_Xtrain_on.npy"))
+            X_train_on = np.load(os.path.join(data_dir, f"{dataset_prefix}_Xtrain_on.npy"))
         except FileNotFoundError:
-            # Fallback if _on file is missing, maybe it's named differently or we use _in as boundary
             print("Warning: _Xtrain_on.npy not found, trying fallback...")
-            X_train_on = np.load(os.path.join(args.data, f"{args.dataset}_Xtrain_in.npy"))
+            X_train_on = np.load(os.path.join(data_dir, f"{dataset_prefix}_Xtrain_in.npy"))
             
-        X_train_out = np.load(os.path.join(args.data, f"{args.dataset}_Xtrain_out.npy"))
+        X_train_out = np.load(os.path.join(data_dir, f"{dataset_prefix}_Xtrain_out.npy"))
         
         X_train_on = torch.from_numpy(X_train_on).float().to(config.device)
         X_train_out = torch.from_numpy(X_train_out).float().to(config.device)
@@ -112,8 +111,8 @@ if __name__ == "__main__":
 
     #### Load test set ####
     try:
-        X_test = np.load(os.path.join(args.data, f"{args.dataset}_Xtest.npy"))
-        Y_test = np.load(os.path.join(args.data, f"{args.dataset}_Ytest.npy"))
+        X_test = np.load(os.path.join(data_dir, f"{dataset_prefix}_Xtest.npy"))
+        Y_test = np.load(os.path.join(data_dir, f"{dataset_prefix}_Ytest.npy"))
         X_test = torch.Tensor(X_test).to(config.device)
         Y_test = torch.Tensor(Y_test).to(config.device).unsqueeze(-1)
         test_loader = DataLoader(TensorDataset(X_test, Y_test), batch_size=config.test_batch_size)
@@ -144,15 +143,8 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Error loading checkpoint {args.resume}: {e}")
 
-    if args.resume:
-        # ... (keep existing resume logic)
-        pass
-
-    # Automatic Eikonal scaling extraction
     if config.eikonal_weight > 0:
         if args.eikonal_normalize_scale == "auto":
-            # Extract from model's preprocessing layer if possible
-            # For G-NDF Sequential, it's model[0].xyz_std
             preprocess = None
             if isinstance(model, nn.Sequential):
                 preprocess = model[0]
@@ -174,7 +166,6 @@ if __name__ == "__main__":
 
     print("PARAMETERS:", count_parameters(model))
 
-    #### Building and calling the trainer ####
     callbacks = []
     callbacks.append(LoggerCB(os.path.join(config.output_folder, "log.csv")))
     
@@ -191,7 +182,6 @@ if __name__ == "__main__":
     else:
         trainer.train_lip_unsigned(model)
 			
-    #### Save final model
     path = os.path.join(config.output_folder, "model_final.pt")
     save_model(model, path)
     print(f"Training finished. Model saved to {path}")

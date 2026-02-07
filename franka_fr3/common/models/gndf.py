@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from geometry_tools import ControlPointManager
+from utils import ControlPoint
 from common.models.sll import DenseSDP, SDPBasedLipschitzDense
 from deel import torchlip
 
@@ -15,24 +15,19 @@ class GNDF_Preprocessing_7D(nn.Module):
     def __init__(self, n_points_per_link=1, device="cuda"):
         super().__init__()
         self.device = device
-        self.cp_manager = ControlPointManager(device=device, n_points_per_link=n_points_per_link)
+        self.cp_manager = ControlPoint(device=device, n_points_per_link=n_points_per_link)
         
-        # Statistics for normalization
         self.register_buffer('xyz_mean', torch.tensor(0.116775))
         self.register_buffer('xyz_std', torch.tensor(0.272722))
         
     def forward(self, x):
         if x.shape[1] == 7:
-            # Inference Mode: input is q (B, 7), calculate XYZ internaly
             q = x
             points = self.cp_manager.get_control_points(q)
             points_flat = points.reshape(q.shape[0], -1)
-            # Normalize physical points
             points_norm = (points_flat - self.xyz_mean) / self.xyz_std
             return points_norm
         else:
-            # Training Mode: input is full XYZ features (B, 21 or B, 27 etc.)
-            # We treat the entire input as coordinates to be normalized
             points_norm = (x - self.xyz_mean) / self.xyz_std
             return points_norm
 
@@ -42,18 +37,14 @@ def G_NDF(n_layers=30, n_hidden=256, n_points_per_link=1, device="cuda"):
     Functional model builder for G-NDF 7D. 
     Maintains 1-Lipschitz property through SDP-based layers.
     """
-    # 1. Preprocessing
     preprocess = GNDF_Preprocessing_7D(
         n_points_per_link=n_points_per_link,
         device=device
     )
     
-    # 2. Dimensions
-    # 7 links arm + 2 links fingers = 9 active segments
     n_points = 9 * n_points_per_link
     dim_in = n_points * 3 
     
-    # 3. Model Architecture
     class RobustPad(nn.Module):
         def __init__(self, target):
             super().__init__()
@@ -76,7 +67,6 @@ def G_NDF(n_layers=30, n_hidden=256, n_points_per_link=1, device="cuda"):
     
     return model
 
-# Legacy class-based G_NDF for backward compatibility
 class G_NDF_Legacy(nn.Module):
     def __init__(self, n_layers=20, n_hidden=256, device="cuda"):
         super().__init__()

@@ -1,0 +1,48 @@
+<mujoco model="fr3_clutter_scene">
+  <compiler meshdir="../assets"/>
+  <include file="../models/fr3.xml"/>
+
+  <statistic center="0.2 0 0.4" extent=".8"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="120" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    <material name="obstacle_mat" rgba="0.9 0.1 0.1 1" reflectance="0.5"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+    <geom name="floor" size="0 0 0.05" type="plane" pos="0 0 0" material="groundplane"/>
+
+    <!-- RANDOM CLUTTER -->
+    <geom name="obs_0" type="box" size="0.049893891959232696 0.049893891959232696 0.049893891959232696" pos="0.758 -0.370 0.681" quat="0.764 0.459 -0.416 -0.178" rgba="0.22 0.94 0.88 1.0"/>
+    <geom name="obs_1" type="sphere" size="0.04290501213527885" pos="0.722 0.286 0.148" quat="-0.611 0.724 0.165 0.272" rgba="0.76 0.92 0.37 1.0"/>
+    <geom name="obs_2" type="sphere" size="0.0722176209875601" pos="0.168 -0.493 0.117" quat="0.394 -0.361 0.152 -0.831" rgba="0.41 0.31 0.91 1.0"/>
+    <geom name="obs_3" type="sphere" size="0.05738694955058548" pos="0.424 -0.070 0.444" quat="0.263 0.876 0.354 -0.195" rgba="0.08 0.95 0.29 1.0"/>
+    <geom name="obs_4" type="cylinder" size="0.06307026306946806 0.06307026306946806" pos="0.078 -0.518 0.552" quat="-0.250 0.440 0.127 -0.853" rgba="0.47 0.28 0.69 1.0"/>
+    <geom name="obs_5" type="cylinder" size="0.05869831473522689 0.05869831473522689" pos="0.418 0.433 0.779" quat="-0.624 -0.560 -0.544 0.042" rgba="0.84 0.53 0.69 1.0"/>
+    <geom name="obs_6" type="box" size="0.07570607471443555 0.07570607471443555 0.07570607471443555" pos="0.169 0.364 0.515" quat="0.862 0.085 0.495 0.073" rgba="0.17 0.89 1.00 1.0"/>
+    <geom name="obs_7" type="box" size="0.07735103979059771 0.07735103979059771 0.07735103979059771" pos="0.223 -0.738 0.236" quat="0.378 0.364 -0.477 -0.705" rgba="0.56 0.28 0.46 1.0"/>
+    <geom name="obs_8" type="box" size="0.044341677370746 0.044341677370746 0.044341677370746" pos="0.403 0.362 0.114" quat="0.390 -0.114 0.255 -0.877" rgba="0.11 0.36 0.98 1.0"/>
+    <geom name="obs_9" type="cylinder" size="0.049933874520786105 0.049933874520786105" pos="-0.450 0.364 0.297" quat="-0.612 -0.718 0.306 -0.129" rgba="0.67 0.00 0.41 1.0"/>
+    <geom name="obs_10" type="sphere" size="0.04642738326991426" pos="-0.423 0.003 0.679" quat="-0.089 0.593 0.387 -0.701" rgba="0.76 0.01 0.04 1.0"/>
+    <geom name="obs_11" type="box" size="0.06304621561052921 0.06304621561052921 0.06304621561052921" pos="0.440 -0.272 0.236" quat="-0.160 0.453 0.321 0.816" rgba="0.97 0.10 0.52 1.0"/>
+    <geom name="obs_12" type="sphere" size="0.06847140215317923" pos="-0.247 -0.446 0.725" quat="0.711 -0.600 0.362 0.061" rgba="0.04 0.76 0.14 1.0"/>
+    <geom name="obs_13" type="box" size="0.07905739483712325 0.07905739483712325 0.07905739483712325" pos="-0.366 0.581 0.505" quat="0.064 -0.105 0.991 -0.058" rgba="0.32 0.30 0.43 1.0"/>
+    <geom name="obs_14" type="box" size="0.045060481676176996 0.045060481676176996 0.045060481676176996" pos="0.382 -0.617 0.322" quat="-0.801 0.029 0.566 0.191" rgba="0.59 0.94 0.17 1.0"/>
+    <geom name="obs_15" type="box" size="0.05141803584120048 0.05141803584120048 0.05141803584120048" pos="0.568 -0.684 0.322" quat="0.280 0.710 0.235 -0.602" rgba="0.70 0.35 0.43 1.0"/>
+    <geom name="obs_16" type="box" size="0.0739472512627021 0.0739472512627021 0.0739472512627021" pos="0.808 0.141 0.548" quat="0.566 -0.627 -0.227 -0.485" rgba="0.25 0.41 0.73 1.0"/>
+    <geom name="obs_17" type="cylinder" size="0.05898228617863889 0.05898228617863889" pos="0.608 -0.016 0.357" quat="-0.427 0.052 -0.479 0.766" rgba="0.06 0.22 0.98 1.0"/>
+    <geom name="obs_18" type="box" size="0.054171829081379984 0.054171829081379984 0.054171829081379984" pos="0.391 0.634 0.321" quat="0.890 -0.203 0.310 0.266" rgba="0.38 0.01 0.37 1.0"/>
+    <geom name="obs_19" type="box" size="0.063230332863265 0.063230332863265 0.063230332863265" pos="0.758 -0.396 0.290" quat="-0.630 0.545 0.080 0.547" rgba="0.77 0.58 0.74 1.0"/>
+
+  </worldbody>
+</mujoco>

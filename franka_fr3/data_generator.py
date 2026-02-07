@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 import os
 import time
+import torch
+import mujoco
 import argparse
 import numpy as np
-import mujoco
 from tqdm import tqdm
 from multiprocessing import Pool
-
-import torch
-from geometry_tools import ControlPointManager
+from utils import ControlPoint
+from common.utils import get_device
 
 _GLOBAL_ENV = None
 _CP_MANAGER = None
@@ -16,7 +16,7 @@ _CP_MANAGER = None
 def _init_oracle(model_path):
     global _GLOBAL_ENV, _CP_MANAGER
     _GLOBAL_ENV = FR3Env(model_path=model_path)
-    _CP_MANAGER = ControlPointManager(device="cpu", n_points_per_link=2)
+    _CP_MANAGER = ControlPoint(device="cpu", n_points_per_link=1)
 
 class FR3Env:
     def __init__(self, model_path):
@@ -47,7 +47,6 @@ class FR3Env:
 
 def _oracle_worker(q):
     env = _GLOBAL_ENV
-    # 1. Update robot pose (Limit checking is now handled by sampling domain, not labels)
     env.data.qpos[:env.nq] = q
     if env.model.nq > env.nq:
         env.data.qpos[env.nq:env.model.nq] = 0.04
@@ -59,8 +58,9 @@ def _oracle_worker(q):
         if env.is_robot_body[b1] ^ env.is_robot_body[b2]:
             return -1
     return 1
+
 class DataGenerator:
-    def __init__(self, model_path, bounds, n_workers=None, use_gpu=True):
+    def __init__(self, model_path, bounds, device, n_workers=None):
         self.model_path = model_path
         self.bounds = np.array(bounds)
         self.dim = len(bounds)
@@ -68,18 +68,14 @@ class DataGenerator:
         self.hi = np.array([b[1] for b in bounds], dtype=float)
         self.span = self.hi - self.lo
         self.n_workers = n_workers or (os.cpu_count() or 4)
-        self.device = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
-        # 1 point per link -> 9 segments total (7 arm + 2 finger) = 27D xyz
+        self.device = device
         self.n_points_per_link = 1
-        self.cp_manager = ControlPointManager(device=self.device, n_points_per_link=self.n_points_per_link)
+        self.cp_manager = ControlPoint(device=self.device, n_points_per_link=self.n_points_per_link)
         
-        # Pre-estimate max_det for all future calls
-        print(f"Pre-estimating max_det on {self.device}...")
         q_test = torch.tensor(self.lo + np.random.rand(2000, self.dim) * self.span).float().to(self.device)
         dets_test = self.cp_manager.get_jacobian_determinant(q_test)
         self.max_det = 1.2 * dets_test.max().item()
-        print(f"Using {self.device.upper()} (Feature Dim: 27D, max_det: {self.max_det:.4f})")
-    
+
     def _jacobian_weighted_sample(self, n_target):
         if n_target <= 0: return np.zeros((0, self.dim))
         valid_q = []
@@ -108,7 +104,6 @@ class DataGenerator:
                            dtype=int, count=len(points))
     
     def _sample_boundary_points(self, n_target, sigma, pool):
-        """Directed Gaussian Boundary Sampling: Enhanced for sparse obstacle-only boundaries"""
         X_in_all, X_out_all = [], []
         if n_target <= 0: return np.array(X_in_all), np.array(X_out_all)
         
@@ -119,31 +114,26 @@ class DataGenerator:
         consecutive_failures = 0
         
         while (len(X_in_all) + len(X_out_all)) < n_target:
-            # 1. Label a base batch
-            # Mix weighted samples with pure random to explore fresh areas
             q1_weighted = self._jacobian_weighted_sample(batch_size // 2)
             q1_random = self.lo + np.random.rand(batch_size // 2, self.dim) * (self.hi - self.lo)
             q1 = np.vstack([q1_weighted, q1_random])
             
             l1 = self._parallel_label(q1, "Label Base", pool)
             
-            # 2. Perturb ALL and label second batch
-            # If failing, increase sigma to jump further
             noise = np.random.randn(batch_size, self.dim) * (curr_sigma * self.span)
             q2 = np.clip(q1 + noise, self.lo, self.hi)
             l2 = self._parallel_label(q2, "Label Perturbed", pool)
             
-            # 3. Crossing pairs
             mask = (l1 != l2)
             if not np.any(mask):
                 consecutive_failures += 1
                 if consecutive_failures > 3:
-                    curr_sigma *= 1.5 # Search wider
+                    curr_sigma *= 1.5
                     if curr_sigma > 0.5: curr_sigma = sigma
                 continue
             
             consecutive_failures = 0
-            curr_sigma = sigma # Reset sigma on success
+            curr_sigma = sigma
             
             idx_crossing = np.where(mask)[0]
             q_cols = []
@@ -156,7 +146,6 @@ class DataGenerator:
             
             q_cols, q_frees = np.array(q_cols), np.array(q_frees)
             
-            # 4. Light Bisection
             q_mid = (q_cols + q_frees) / 2
             l_mid = self._parallel_label(q_mid, "Final Polish", pool)
             q_cols[l_mid==-1] = q_mid[l_mid==-1]
@@ -177,7 +166,7 @@ class DataGenerator:
         return X_in, X_out
     
     def generate(self, n_pts, near_ratio=0.7, sigma=0.03):
-        print(f">>> Generating {n_pts} points (7D Gaussian+AABB) <<<")
+        print(f"Generating {n_pts} points")
         with Pool(processes=self.n_workers, initializer=_init_oracle, initargs=(self.model_path,)) as pool:
             n_boundary_target = int(n_pts * near_ratio)
             X_in_bound, X_out_bound = self._sample_boundary_points(n_boundary_target, sigma, pool)
@@ -192,7 +181,6 @@ class DataGenerator:
             X_in = X_in[:int(len(X_in)*frac)]; X_out = X_out[:int(len(X_out)*frac)]
         
         Q_in, Q_out = X_in.copy(), X_out.copy()
-        print(f"Augmenting {len(X_in) + len(X_out)} points with XYZ...")
         return self._augment_with_xyz(X_in), self._augment_with_xyz(X_out), Q_in, Q_out
 
     def _augment_with_xyz(self, q_np):
@@ -211,19 +199,20 @@ class DataGenerator:
             np.save(os.path.join(outdir, f"{prefix}_Qtrain_in.npy"), Q_in)
         if Q_out is not None:
             np.save(os.path.join(outdir, f"{prefix}_Qtrain_out.npy"), Q_out)
-        print(f"Saved to {outdir} (Features Path: {outdir})")
+        print(f"Saved to {outdir}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-m', '--model', default='scenes/table_obs10.xml')
-    parser.add_argument("-n", "--n-points", type=int, default=500000)
-    parser.add_argument("-r", "--near-ratio", type=float, default=0.6)
-    parser.add_argument("-s", "--sigma", type=float, default=0.05)
-    parser.add_argument("-o", "--outdir", type=str, default="inputs/table_obs10")
+    parser = argparse.ArgumentParser(description="Generate training data for C-Space NDF")
+    parser.add_argument('--world', default='bookshelf', help='Scene name')
+    parser.add_argument("--n_points", type=int, default=500000, help='Number of points to generate')
+    parser.add_argument("--near_ratio", type=float, default=0.6, help='Ratio of near points to total points')
+    parser.add_argument("--sigma", type=float, default=0.05, help='Standard deviation of Gaussian noise')
     args = parser.parse_args()
     
-    # Load model to get joint limits (using absolute path for correct include resolution)
-    abs_model_path = os.path.abspath(args.model)
+    device = get_device()
+    print_msg(f"Using {device}")
+
+    abs_model_path = os.path.abspath("scenes/" + args.world + ".xml")
     mj_model = mujoco.MjModel.from_xml_path(abs_model_path)
     jnt_limits = []
     for i in range(7):
@@ -232,11 +221,10 @@ if __name__ == "__main__":
         else:
             jnt_limits.append([-np.pi, np.pi])
             
-    print(f"Sampling bounds from MJ model: {jnt_limits}")
-    generator = DataGenerator(model_path=abs_model_path, bounds=jnt_limits)
+    generator = DataGenerator(model_path=abs_model_path, bounds=jnt_limits, device=device)
     t0 = time.time()
     X_in, X_out, Q_in, Q_out = generator.generate(n_pts=args.n_points, near_ratio=args.near_ratio, sigma=args.sigma)
-    generator.save(X_in, X_out, Q_in, Q_out, outdir=args.outdir)
+    generator.save(X_in, X_out, Q_in, Q_out, outdir="inputs/" + args.world)
     print(f"Total time: {time.time()-t0:.2f}s")
 
     print(f"Shape: {X_in.shape}")

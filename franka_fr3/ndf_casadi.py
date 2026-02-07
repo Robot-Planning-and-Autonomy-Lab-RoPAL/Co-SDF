@@ -5,6 +5,7 @@ import torch
 import l4casadi as l4c
 import time
 import os
+import contextlib
 from trajectory_optim import NDFOptimizerFranka
 
 class CasADiPlanner:
@@ -39,7 +40,7 @@ class CasADiPlanner:
 
     def solve(self, start, goal, formulation='hard', solver='ipopt', initial_path=None, 
               safety_margin=0.02, verbose=False, v_max=1.5, a_max=3.0, dt=0.1, 
-              n_waypoints=None, max_iter=50, w_coll=1e5):
+              n_waypoints=None, max_iter=50, w_coll=1e5, w_clr=1.0):
         """
         Solve the path optimization problem.
         
@@ -86,7 +87,11 @@ class CasADiPlanner:
         else:
             raise ValueError(f"Unknown formulation: {formulation}")
             
-        opti.minimize(cost_smooth + cost_coll)
+        # --- 3. Active Clearance Objective (Repulsion Force) ---
+        z = ca.fmin(50, -dists / safety_margin)
+        cost_clearance = w_clr * ca.sum1(ca.exp(z))
+
+        opti.minimize(cost_smooth + cost_coll + cost_clearance)
         
         # --- 3. 基础约束 (Joint/Kinematic) ---
         opti.subject_to(Q[0, :].T == ca.DM(start))
@@ -104,8 +109,9 @@ class CasADiPlanner:
                 "ipopt.max_iter": max_iter,
                 "ipopt.tol": 1e-4,     # Realistic IROS precision
                 "ipopt.acceptable_tol": 1e-3,
+                "ipopt.acceptable_iter": 5, 
                 "ipopt.hessian_approximation": "limited-memory",
-                "print_time": verbose,
+                "print_time": False,
             }
         else:
             solver_name = 'sqpmethod'
@@ -113,23 +119,23 @@ class CasADiPlanner:
                 "qpsol": solver,
                 "max_iter": max_iter,
                 "hessian_approximation": "limited-memory",
-                "print_header": verbose,
-                "print_iteration": verbose,
-                "qpsol_options": {},
-                "tol_pr": 1e-3,
-                "tol_du": 1e-3
+                "print_header": False,
+                "print_iteration": False,
+                "print_status": False,
+                "qpsol_options": {
+                    "verbose": False
+                },
+                "tol_du": 1e-4,
+                "print_time": False,
             }
         
         if solver == 'qpoases':
             opts["qpsol_options"] = {"printLevel": "none"}
         elif solver == 'osqp':
-            opts["qpsol_options"] = {"warm_start_primal": True, "print_out": False}
-            if solver == 'qpoases':
-                opts["qpsol_options"] = {"printLevel": "none"}
-            elif solver == 'osqp':
-                opts["qpsol_options"] = {"warm_start_primal": True, "print_out": False}
+            opts["qpsol_options"] = {"warm_start_primal": True, "print_out": False, "verbose": False}
 
-        opti.solver(solver_name, opts)
+        with _suppress_fd_output(not verbose):
+            opti.solver(solver_name, opts)
         
         # Initial Guess and Solve
         if initial_path is not None:
@@ -158,10 +164,14 @@ class CasADiPlanner:
         }
 
         try:
-            sol = opti.solve()
-            final_path = sol.value(Q)
+            with _suppress_fd_output(not verbose):
+                sol = opti.solve()
+            Qsol = sol.value(Q)
+            final_path = Qsol
             s = sol.stats()
-            stats["success"] = bool(s.get("success", False))
+            rs = str(s.get("return_status", ""))
+            ok = bool(s.get("success", False)) or ("Solve_Succeeded" in rs) or ("Solved_To_Acceptable_Level" in rs)
+            stats["success"] = ok
             stats["return_status"] = s.get("return_status", None)
             stats["iter_count"] = s.get("iter_count", s.get("iterations", s.get("iter", None)))
         except Exception as e:
@@ -180,15 +190,22 @@ class CasADiPlanner:
                 
         return stats["success"], final_path, time.time() - t0, stats
 
-if __name__ == "__main__":
-    # Quick test
-    scene = "scenes/table_obs20.xml"
-    model = "output/table_obs20/model_final.pt"
-    
-    planner = CasADiPlanner(model, scene)
-    start = np.array([0, -0.785, 0, -2.356, 0, 1.571, 0.785])
-    goal = np.array([0.5, 0.2, -0.5, -1.5, 0.1, 1.8, 0.2])
-    
-    print("Testing CasADi/SQP-OSQP...")
-    ok, path, t = planner.solve(start, goal, formulation='hard', solver='osqp', verbose=True)
-    print(f"Success: {ok}, Time: {t:.4f}s")
+@contextlib.contextmanager
+def _suppress_fd_output(enabled: bool):
+    if not enabled:
+        yield
+        return
+
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    old_stdout = os.dup(1)
+    old_stderr = os.dup(2)
+    os.dup2(devnull, 1)
+    os.dup2(devnull, 2)
+    os.close(devnull)
+    try:
+        yield
+    finally:
+        os.dup2(old_stdout, 1)
+        os.dup2(old_stderr, 2)
+        os.close(old_stdout)
+        os.close(old_stderr)

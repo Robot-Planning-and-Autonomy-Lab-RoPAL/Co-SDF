@@ -6,7 +6,7 @@ import argparse
 import torch
 from ndf_casadi import CasADiPlanner
 from rrt import RRT
-from trajecor_verify import TrajectoryEvaluator
+from trajectory_verify import TrajectoryEvaluator
 
 def run_benchmark(iterations=5, scene="scenes/table_obs10.xml", model_path="output/table_obs10/model_final.pt"):
     planner = CasADiPlanner(model_path, scene)
@@ -151,8 +151,8 @@ def run_benchmark(iterations=5, scene="scenes/table_obs10.xml", model_path="outp
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--iter", type=int, default=5)
-    parser.add_argument("--scene", type=str, default="scenes/table_obs10.xml")
-    parser.add_argument("--model", type=str, default="output/table_obs10/model_final.pt")
+    parser.add_argument("--scene", type=str, default="scenes/table_obs20.xml")
+    parser.add_argument("--model", type=str, default="output/table_obs20/model_final.pt")
     args = parser.parse_args()
     
     run_benchmark(iterations=args.iter, scene=args.scene, model_path=args.model)

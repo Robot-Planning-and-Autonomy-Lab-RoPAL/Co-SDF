@@ -10,8 +10,8 @@ from typing import Tuple, Dict
 from scipy.optimize import minimize
 import time
 from common.models import load_model
-from trajecor_verify import check_path_collision_simple, TrajectoryEvaluator
-from geometry_tools import ControlPointManager
+from trajectory_verify import check_path_collision_simple, TrajectoryEvaluator
+from utils import ControlPoint
 
 class NDFOptimizerFranka:
 
@@ -24,7 +24,7 @@ class NDFOptimizerFranka:
         self.model.eval()
         
         # Initialize control point manager for geometry features
-        self.cp_manager = ControlPointManager(device=device)
+        self.cp_manager = ControlPoint(device=device)
 
         # Shared evaluator
         self.evaluator = TrajectoryEvaluator(scene_xml, model=self.model, device=device)

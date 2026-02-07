@@ -63,4 +63,3 @@ def select_model(name, DIM, n_layers, n_hidden, **kwargs):
 
         case _:
             raise Exception(f"model name {name} not recognized")
-

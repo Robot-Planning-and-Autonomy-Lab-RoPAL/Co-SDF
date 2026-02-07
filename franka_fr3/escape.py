@@ -4,11 +4,11 @@ import mujoco
 import os
 import time
 from tqdm import tqdm
-from geometry_tools import ControlPointManager
 from common.models import load_model
+from common.utils import get_device
 
 class Escape:
-    def __init__(self, model_path, scene_xml, device="cuda"):
+    def __init__(self, model_path, scene_xml, device):
         self.device = device
         self.model = load_model(model_path, device)
         self.model.eval()
@@ -16,14 +16,12 @@ class Escape:
         self.mj_model = mujoco.MjModel.from_xml_path(self.scene_xml)
         self.mj_data = mujoco.MjData(self.mj_model)
         
-        # 1. Standard Initial State (qpos0)
         mujoco.mj_resetData(self.mj_model, self.mj_data)
         if self.mj_model.nkey > 0:
             self.qpos0 = self.mj_model.key_qpos[0].copy()
         else:
             self.qpos0 = self.mj_data.qpos.copy()
         
-        # 2. Precise Joint Indexing (Arm 1-7)
         joint_names = [f"fr3_joint{i}" for i in range(1, 8)]
         self.q_idx = []
         self.q_lo = []
@@ -40,7 +38,6 @@ class Escape:
         self.q_lo = np.array(self.q_lo)
         self.q_hi = np.array(self.q_hi)
 
-        # 3. Dynamic Finger Identification
         self.finger_q_idx = []
         self.finger_open_val = []
         for name in ["finger_joint1", "finger_joint2"]:
@@ -48,9 +45,7 @@ class Escape:
             if jid != -1 and self.mj_model.jnt_type[jid] == mujoco.mjtJoint.mjJNT_SLIDE:
                 self.finger_q_idx.append(self.mj_model.jnt_qposadr[jid])
                 self.finger_open_val.append(self.mj_model.jnt_range[jid][1])
-        print(f"DEBUG: Precisely identified {len(self.finger_q_idx)} gripper sliders.")
 
-        # 4. Tree-based Robot Body Identification
         base_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "base")
         if base_id == -1: base_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "fr3_link0")
         
@@ -137,9 +132,8 @@ class Escape:
                 if step >= 10:
                     recent_avg = np.mean(ndf_history[-5:])
                     prev_avg = np.mean(ndf_history[-10:-5]) if len(ndf_history) >= 10 else ndf_history[0]
-                    # More sensitive: 1e-4 instead of 5e-5
                     if abs(recent_avg - prev_avg) < 1e-4:
-                        q.add_(torch.randn_like(q) * 0.01) # Bigger kick
+                        q.add_(torch.randn_like(q) * 0.01)
                 q.clamp_(q_lo_t, q_hi_t)
             
             cfg_history.append(q.detach().cpu().numpy().copy())
@@ -155,10 +149,25 @@ def set_seed(seed):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-def run_analysis(args):
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--world", type = str, default="obs10", help="scene name")
+    parser.add_argument("--samples", type=int, default=200, help="number of samples")
+    parser.add_argument("--lr", type=float, default=0.1, help="learning rate")
+    parser.add_argument("--max_steps", type=int, default=100, help="maximum number of steps")
+    parser.add_argument("--safety_margin", type=float, default=0.02, help="safety margin")
+    parser.add_argument("--seed", type=int, default=42, help="random seed")
+    args = parser.parse_args()
+
+    scene = f"scenes/{args.world}.xml"
+    model = f"output/{args.world}/model_final.pt"
+
+    device = get_device()
+    print(f"Using device: {device}")
+
     set_seed(args.seed)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    esc_tool = Escape(args.model, args.scene, device)
+    esc_tool = Escape(model, scene, device)
     print(f"Sampling {args.samples} collision points...")
     seeds = [esc_tool.find_collision_q() for _ in tqdm(range(args.samples))]
     
@@ -168,7 +177,7 @@ def run_analysis(args):
     total_steps = 0
     total_time = 0
     
-    print(f"\nRunning Adam Escape (LR: {args.lr}, Target: {args.safety_margin})...")
+    print(f"\nRunning Adam Escape with learning rate: {args.lr}, safety margin: {args.safety_margin}, max steps: {args.max_steps}")
     for i in tqdm(range(args.samples), desc="Escaping"):
         q0 = seeds[i]
         history, ndf_success, steps, dt = esc_tool.optim_escape(q0, lr=args.lr, safety_margin=args.safety_margin, max_steps=args.max_steps)
@@ -176,40 +185,27 @@ def run_analysis(args):
         
         gt_is_coll = esc_tool.get_collision_status(final_q)
         
-        if ndf_success: ndf_success_count += 1
-        if not gt_is_coll: gt_actually_safe_count += 1
-        
+        if ndf_success: 
+            ndf_success_count += 1
+
+        if not gt_is_coll: 
+            gt_actually_safe_count += 1
+
         if ndf_success and not gt_is_coll:
             strict_success_count += 1
-            total_steps += steps
-            total_time += dt
             status = "SUCCESS"
-        else: status = "FAILED "
-        
-        if i < 15:
-            _, dist, _ = esc_tool.get_detailed_info(final_q)
-            print(f"ID {i:2} | {status} | Steps: {steps:2} | Time: {dt*1000:.1f}ms | GT_Dist: {dist:.4f} | Final_NDF: {esc_tool.model(torch.from_numpy(final_q).float().to(device).unsqueeze(0)).item():.4f}")
-            
-    print(f"\n" + "="*60 + "\nADAM ESCAPE PERFORMANCE (27D Midpoint - Optimized)\n" + "="*60)
+        else: 
+            status = "FAILED "
+
+        total_steps += steps
+        total_time += dt
+
+    print(f"\n" + "="*60 + "\nESCAPE PERFORMANCE\n" + "="*60)
     print(f"Total Samples: {args.samples}")
     print(f"NDF Perceived SR: {ndf_success_count/args.samples*100:.1f}%")
     print(f"GT Physical SR:   {gt_actually_safe_count/args.samples*100:.1f}%")
     print(f"Strict Success:   {strict_success_count/args.samples*100:.1f}%")
-    if strict_success_count > 0:
-        print(f"Avg Steps:        {total_steps/strict_success_count:.1f}")
-        print(f"Avg Time:         {total_time/args.samples*1000:.2f} ms")
-        print(f"Avg Step Time:    {total_time/total_steps*1000:.2f} ms")
+    print(f"Avg Steps:        {total_steps / args.samples:.1f}")
+    print(f"Avg Time:         {total_time / args.samples * 1000:.2f} ms")
+    print(f"Avg Step Time:    {total_time / total_steps * 1000:.2f} ms")
     print("="*60 + "\n")
-
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="output/table_obs20/model_final.pt")
-    parser.add_argument("--scene", default="scenes/table_obs20.xml")
-    parser.add_argument("--samples", type=int, default=200)
-    parser.add_argument("--lr", type=float, default=0.07)
-    parser.add_argument("--max_steps", type=int, default=100)
-    parser.add_argument("--safety_margin", type=float, default=0.02)
-    parser.add_argument("--seed", type=int, default=42)
-    args = parser.parse_args()
-    run_analysis(args)

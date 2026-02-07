@@ -64,7 +64,7 @@ class RRT:
         """Convenience method for numpy arrays."""
         return not check_franka_collision(self.mj_model, self.mj_data, q, self.is_robot_body)
 
-    def plan(self, start_q=None, goal_q=None, output_file="franka_rrt_path.npy", timeout=30.0):
+    def plan(self, start_q=None, goal_q=None, output_file="franka_rrt_path.npy", timeout=10.0, n_waypoints=100):
         if start_q is None:
             print("Sampling valid start state...")
             start_state = self.get_valid_random_state()
@@ -128,17 +128,3 @@ class RRT:
                 
             if self.isStateValid(state):
                 return state
-
-
-if __name__ == "__main__":
-    
-    scene_file = "scenes/table_obs20.xml"
-    if not os.path.exists(scene_file):
-        print(f"Error: scene file {scene_file} not found.")
-        sys.exit(1)
-        
-    planner = RRT(scene_file)
-    planner.plan("output/traj/rrt.npy")
-    
-    sys.stdout.flush()
-    os._exit(0)

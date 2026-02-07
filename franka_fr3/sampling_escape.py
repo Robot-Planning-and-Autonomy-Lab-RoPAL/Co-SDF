@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 import os
-import argparse
 import time
-import numpy as np
 import torch
 import mujoco
+import argparse
+import numpy as np
 from tqdm import tqdm
-import sys
-
 from common.models import load_model
-from geometry_tools import ControlPointManager
-
+from common.utils import get_device
 
 def check_franka_collision(mj_model, mj_data, q, is_robot_body):
     mj_data.qpos[:7] = q
@@ -21,14 +18,11 @@ def check_franka_collision(mj_model, mj_data, q, is_robot_body):
     for i in range(mj_data.ncon):
         c = mj_data.contact[i]
         b1, b2 = mj_model.geom_bodyid[c.geom1], mj_model.geom_bodyid[c.geom2]
-        # XOR logic: Robot vs environment ONLY (Matches escape.py and NDF training)
         if is_robot_body[b1] ^ is_robot_body[b2]:
             return True
     return False
 
-
 def find_near_boundary_collision(mj_model, mj_data, is_robot_body):
-    """Sample a collision point that is very close to the boundary."""
     lower = mj_model.jnt_range[:7, 0]
     upper = mj_model.jnt_range[:7, 1]
     while True:
@@ -39,7 +33,7 @@ def find_near_boundary_collision(mj_model, mj_data, is_robot_body):
         
         if c1 != c2:
             q_coll, q_free = (q1, q2) if c1 else (q2, q1)
-            for _ in range(5): # Bisection
+            for _ in range(5): 
                 mid = (q_coll + q_free) / 2
                 if check_franka_collision(mj_model, mj_data, mid, is_robot_body): q_coll = mid
                 else: q_free = mid
@@ -62,61 +56,57 @@ def run_sampling_escape(model, q0, mj_model, mj_data, is_robot_body, step_size, 
             ndf_curr = model(q_curr.reshape(1, -1)).item()
             ndf_history.append(ndf_curr)
             
-            # 1. Track Successes
-            if gt_success_step is None and not check_franka_collision(mj_model, mj_data, q_curr.cpu().numpy(), is_robot_body):
-                gt_success_step = step
-            
-            if ndf_success_step is None and ndf_curr >= safety_margin:
+            if ndf_curr >= safety_margin:
                 ndf_success_step = step
-            
-            # Stop if both conditions met
-            if gt_success_step is not None and ndf_success_step is not None:
                 break
             
-            # 2. Sample K candidates
             noise = torch.randn(K, 7, device=device) * step_size
             candidates = torch.clamp(q_curr + noise, 
                                     torch.from_numpy(lower).float().to(device),
                                     torch.from_numpy(upper).float().to(device))
             
-            # Evaluate all candidates
             ndf_candidates = model(candidates).squeeze()
-            
             best_idx = torch.argmax(ndf_candidates)
             q_curr = candidates[best_idx]
-            
             trajectory.append(q_curr.cpu().numpy().copy())
+    
+    # Final check at the stopping point
+    final_q_np = q_curr.cpu().numpy()
+    is_safe_gt = not check_franka_collision(mj_model, mj_data, final_q_np, is_robot_body)
     
     return {
         "ndf_success": ndf_success_step is not None,
-        "gt_success": gt_success_step is not None,
-        "gt_steps": gt_success_step if gt_success_step is not None else step,
+        "gt_success": is_safe_gt,
+        "gt_steps": ndf_success_step if ndf_success_step is not None else step,
         "ndf_steps": ndf_success_step if ndf_success_step is not None else step,
-        "final_q": q_curr.cpu().numpy(),
+        "final_q": final_q_np,
         "trajectory": np.array(trajectory),
         "ndf_history": ndf_history
     }
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Franka 7D Sampling Escape Evaluation")
-    parser.add_argument('--model-path', default='output/table_obs10/model_final.pt', help="NDF model path")
-    parser.add_argument('--scene-xml', default='scenes/table_obs10.xml', help="Scene XML path")
+    parser.add_argument('--world', default='obs10', help="scene name")
     parser.add_argument('--n-samples', type=int, default=200, help="Number of collision configs to sample")
     parser.add_argument('--step-size', type=float, default=0.05, help="Step size for sampling")
     parser.add_argument('--K-sampling', type=int, default=50, help="Number of candidates per step")
     parser.add_argument('--max-steps', type=int, default=100, help="Maximum steps for escape")
-    parser.add_argument('--safety-margin', type=float, default=0.0, help="NDF threshold for escape")
+    parser.add_argument('--safety-margin', type=float, default=0.02, help="NDF threshold for escape")
     parser.add_argument('--output-dir', default='output/sampling', help="Output directory")
     args = parser.parse_args()
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"\nEvaluating Franka 7D NDF Sampling Escape (Standardized) on {device}...")
+    scene = f"scenes/{args.world}.xml"
+    model = f"output/{args.world}/model_final.pt"
+
+    device = get_device()
+    print(f"Using device: {device}")
+
+    print(f"\nEvaluating Franka 7D NDF Sampling Escape")
     
-    model = load_model(args.model_path, device)
+    model = load_model(model, device)
     model.eval()
 
-    # Pre-load MuJoCo model
-    abs_xml = os.path.abspath(args.scene_xml)
+    abs_xml = os.path.abspath(scene)
     mj_model = mujoco.MjModel.from_xml_path(abs_xml)
     mj_data = mujoco.MjData(mj_model)
     
@@ -155,21 +145,17 @@ if __name__ == "__main__":
     
     ndf_success_flags = [r["ndf_success"] for r in results]
     gt_success_flags = [r["gt_success"] for r in results]
-    gt_steps = [r["gt_steps"] for r in results if r["gt_success"]]
-    ndf_steps = [r["ndf_steps"] for r in results if r["ndf_success"]]
+    all_gt_steps = [r["gt_steps"] + 1 if r["gt_success"] else args.max_steps for r in results]
+    all_ndf_steps = [r["ndf_steps"] + 1 if r["ndf_success"] else args.max_steps for r in results]
     
     print(f"\n{'='*60}")
-    print(f"  FRANKA 7D NDF SAMPLING ESCAPE RESULTS (STANDARDIZED)")
+    print(f"  FRANKA 7D NDF SAMPLING ESCAPE RESULTS")
+    print(f"  K samples per step: {args.K_sampling}, Safety margin: {args.safety_margin}")
     print(f"{'='*60}")
-    print(f"  K samples per step: {args.K_sampling}")
-    print(f"  Safety margin: {args.safety_margin}")
-    print(f"{'='*60}")
-    print(f"  GT Success Rate:  {np.mean(gt_success_flags)*100:.1f}% (NO COLLISION)")
-    print(f"  NDF Success Rate: {np.mean(ndf_success_flags)*100:.1f}% (NDF >= margin)")
-    if gt_steps:
-        print(f"  Avg Steps (GT):   {np.mean(gt_steps):.1f}")
-    if ndf_steps:
-        print(f"  Avg Steps (NDF):  {np.mean(ndf_steps):.1f}")
+    print(f"  GT Success Rate:  {np.mean(gt_success_flags)*100:.1f}%")
+    print(f"  NDF Success Rate: {np.mean(ndf_success_flags)*100:.1f}%")
+    print(f"  Avg Steps (GT):   {np.mean(all_gt_steps):.1f}")
+    print(f"  Avg Steps (NDF):  {np.mean(all_ndf_steps):.1f}")
     print(f"  Total Time: {total_time:.2f}s")
     print(f"  Avg Time/Sample: {total_time/n_actual*1000:.1f} ms")
     print(f"{'='*60}\n")

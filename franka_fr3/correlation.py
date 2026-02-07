@@ -1,15 +1,17 @@
 import torch
-import numpy as np
+import argparse
 import mujoco
 import os
-import matplotlib.pyplot as plt
+import random
+import numpy as np
 import seaborn as sns
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 from scipy.stats import spearmanr
 from sklearn.metrics import f1_score, confusion_matrix
 from common.models import load_model
-from geometry_tools import ControlPointManager
-import random
+from common.utils import get_device
+from utils import ControlPoint
 
 def set_seed(seed):
     random.seed(seed)
@@ -43,7 +45,6 @@ def _worker_dist_approx(q):
             mj_data.qpos[7:mj_model.nq] = 0.04
         mujoco.mj_forward(mj_model, mj_data)
         
-        # XOR logic: collision only if one geom is robot and the other is environment
         colliding_pairs = []
         for i in range(mj_data.ncon):
             c = mj_data.contact[i]
@@ -60,11 +61,9 @@ def _worker_dist_approx(q):
     coll_info = check_collision(q)
     is_coll = coll_info[0]
     
-    # Initial search schedule
     radii = [0.05, 0.1, 0.2, 0.4, 0.8, 1.6]
     Ns    = [120, 80, 50, 30, 20, 10]
     
-    # Anisotropic weights: favor proximal/sensitive joints for higher hit-rate
     weights = np.array([1.0, 1.0, 1.0, 0.8, 0.8, 0.6, 0.6])
     
     current_min = float('inf')
@@ -90,7 +89,6 @@ def _worker_dist_approx(q):
         if found_crossing and current_min < radius * 0.7:
             break
             
-    # Exhaustive mode: if still not hit, keep expanding up to 6.0 rad
     if not found_crossing and _GT_EXHAUSTIVE:
         r_step = 1.6
         while r_step < 6.0 and not found_crossing:
@@ -115,8 +113,8 @@ def _worker_dist_approx(q):
 
     return is_coll, current_min if not is_coll else -current_min, True, coll_info[1] if is_coll else []
 
-def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, exhaustive=False):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, device, exhaustive=False):
+
     model = load_model(model_path, device)
     model.eval()
     
@@ -137,26 +135,19 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, exhau
     lo, hi = mj_model.jnt_range[:7, 0], mj_model.jnt_range[:7, 1]
     qs = lo + np.random.rand(n_samples, 7) * (hi - lo)
     
-    # 1. Compute NDF values in bulk on GPU
-    print("Computing NDF values...")
-    
-    # Initialize FK preprocessing (matches model setting)
-    cp_manager = ControlPointManager(device=device, n_points_per_link=1)
+    cp_manager = ControlPoint(device=device, n_points_per_link=1)
     
     ndf_vals = []
     batch_size = 1000
     for i in range(0, n_samples, batch_size):
         q_batch = torch.from_numpy(qs[i:i+batch_size]).float().to(device)
         
-        # Pass joint angles (7D) - model's internal preprocess will handle 21D conversion
         with torch.no_grad():
             ndf_outputs = model(q_batch).squeeze()
             if ndf_outputs.dim() == 0: ndf_outputs = ndf_outputs.unsqueeze(0)
             ndf_vals.extend(ndf_outputs.cpu().numpy().tolist())
     ndf_vals = np.array(ndf_vals)
 
-    # 2. Parallel distance approximation
-    print("Computing Ground Truth distances (Optimized Parallel)..." + (" (Exhaustive)" if exhaustive else ""))
     from multiprocessing import Pool
     with Pool(initializer=_init_gt_worker, initargs=(abs_xml, robot_body_indices, exhaustive)) as pool:
         results = list(tqdm(pool.imap(_worker_dist_approx, qs), total=n_samples, desc="GT Analysis"))
@@ -166,20 +157,16 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, exhau
     hit_flags = np.array([r[2] for r in results])
     coll_pairs_list = [r[3] for r in results]
     
-    # Calculate Metrics
-    # 1. Spearman Correlation only on HIT samples (Scientific approach)
     hit_mask = hit_flags
     if np.any(hit_mask):
         corr_dist, _ = spearmanr(approx_dist[hit_mask], ndf_vals[hit_mask])
     else:
         corr_dist = 0.0
     
-    # 2. Binary correlation (all points - the collision labels are exact)
     corr_binary, _ = spearmanr(ndf_vals, -gt_labels.astype(float))
     
     hit_rate = np.mean(hit_flags) * 100
     
-    # Threshold logic
     y_true = gt_labels
     fixed_thresh = getattr(args, "fixed_thresh", None)
     if fixed_thresh is not None:
@@ -189,7 +176,6 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, exhau
         best_acc = np.mean(y_true == y_pred_best)
         print(f"Using fixed threshold: {best_thresh}")
     else:
-        # Automatic threshold optimization (maximize F1 score - using all points)
         thresh_range = np.linspace(np.percentile(ndf_vals, 5), np.percentile(ndf_vals, 95), 100)
         best_f1, best_thresh, best_acc = 0, 0, 0
         for t in thresh_range:
@@ -205,7 +191,6 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, exhau
     fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
     fnr = fn / (fn + tp) if (fn + tp) > 0 else 0
     
-    # FNR Breakdown
     gripper_keywords = {'hand', 'left_finger', 'right_finger', 'finger'}
     fn_indices = np.where((y_true == True) & (y_pred_best == False))[0]
     fn_gripper = 0
@@ -219,9 +204,7 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, exhau
             fn_gripper += 1
         else:
             fn_arm += 1
-            # Track which arm links are involved
             for p in pairs:
-                # p is "body1<->body2", find the robot one
                 parts = p.split("<->")
                 for part in parts:
                     if part.startswith("fr3_link") or part == "base":
@@ -250,18 +233,14 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, exhau
     
     os.makedirs(out_dir, exist_ok=True)
     
-    # Plot: Scatter plot with hit/miss distinction
     sns.set_theme()
     plt.figure(figsize=(7, 7))
     
-    # 1. Scatter HIT points (True distance known)
     if np.any(hit_mask):
         plt.scatter(approx_dist[hit_mask], ndf_vals[hit_mask], s=12, alpha=0.6, label='Hit (True Distance)')
     
-    # 2. Scatter MISS points (Visualized at boundaries)
     miss_mask = ~hit_flags
     if np.any(miss_mask):
-        # Place miss points at +/- 1.6 with some jitter
         viz_dist = (1.6 + np.random.rand(np.sum(miss_mask)) * 0.15) * np.where(gt_labels[miss_mask], -1, 1)
         plt.scatter(viz_dist, ndf_vals[miss_mask], s=8, alpha=0.2, color='gray', label='Miss (Out of Range)')
     
@@ -278,19 +257,21 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, exhau
     plt.close()
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="output/table_obs10/model_final.pt", help = "model file")
-    parser.add_argument("--scene", default="scenes/table_obs10.xml", help = "scene file")
-    parser.add_argument("--world", type=str, default="obs10", help = "world name")
-    parser.add_argument("--samples", type=int, default=5000, help = "number of samples")
+    parser.add_argument("--world", type=str, default="obs20", help = "world name")
+    parser.add_argument("--samples", type=int, default=3000, help = "number of samples")
     parser.add_argument("--out", type=str, default="output/correlation", help = "output directory")
     parser.add_argument("--fixed-thresh", type=float, default=None, help="Use a fixed threshold for classification")
     parser.add_argument("--exhaustive", action="store_true", help="Search much further to reach 100% Hit Rate")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     args = parser.parse_args()
     
+    device = get_device()
+    print(f"Using device: {device}")
     if args.seed is not None:
         set_seed(args.seed)
     
-    evaluate_franka_correlation(args.model, args.scene, args.samples, args.out, exhaustive=args.exhaustive)
+    sence = "scenes/" + args.world + ".xml"
+    model = "output/" + args.world + "/model_final.pt"
+
+    evaluate_franka_correlation(model, sence, args.samples, args.out, device, exhaustive=args.exhaustive)
