@@ -30,7 +30,7 @@ class WorkspaceSDFPlanner:
     
     def solve(self, start, goal, initial_path=None, solver='ipopt', 
               safety_margin=0.02, verbose=False, v_max=1.5, a_max=3.0, dt=0.1, 
-              n_waypoints=None, max_iter=50, w_coll=1e5, w_clr=1.0):
+              n_waypoints=None, max_iter=50, w_coll=1e5, w_clr=0.1):
         if initial_path is not None:
             n = initial_path.shape[0]
         else:
@@ -55,20 +55,14 @@ class WorkspaceSDFPlanner:
         
         # --- 2. Active Clearance / Collision Constraints ---
         sdf_dists = self.l4c_sdf(Q)
-        
-        # Use Slack Variables for Robustness (Soft Constraints)
-        slack = opti.variable(n)
-        opti.subject_to(slack >= 0)
-        opti.set_initial(slack, 0.0)
-        
-        # Violation cost (Hinge Loss)
-        violation = ca.fmax(0.0, safety_margin - sdf_dists)
-        cost_clearance = w_clr * ca.sumsqr(violation)
-        
-        # Penalize slack heavily to keep it close to zero if possible
-        cost_slack = 1e6 * ca.sumsqr(slack)
+        sdf_dists = ca.reshape(sdf_dists, n, 1)  # make shape explicit like NDF (n,1)
+
+        # --- 3. Active Clearance Objective (Repulsion Force) ---
+        # Synchronized with ndf_casadi.py
+        z = ca.fmin(50, -sdf_dists / safety_margin)
+        cost_clearance = w_clr * ca.sum1(ca.exp(z))
             
-        opti.minimize(cost_smooth + cost_clearance + cost_slack)
+        opti.minimize(cost_smooth + cost_clearance)
         
         opti.subject_to(Q[0, :].T == ca.DM(start))
         opti.subject_to(Q[-1, :].T == ca.DM(goal))
@@ -76,8 +70,8 @@ class WorkspaceSDFPlanner:
         for j in range(2):
             opti.subject_to(opti.bounded(self.lower[j], Q[:, j], self.upper[j]))
         
-        # Soft constraint: dist + slack >= margin
-        opti.subject_to(sdf_dists + slack >= safety_margin)
+        # Hard constraint: dist >= margin
+        opti.subject_to(sdf_dists >= safety_margin)
         
         # Velocity and Acceleration limits
         opti.subject_to(opti.bounded(-v_max * dt, diff1, v_max * dt))

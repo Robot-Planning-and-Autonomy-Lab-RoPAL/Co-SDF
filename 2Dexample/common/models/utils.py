@@ -36,10 +36,10 @@ def load_model(path, device:str):
             link_lengths=link_lengths,
             device=device,
         )
-    elif model_type == "G-NDF-2D-SIREN":
-        from .gndf_siren_2d import G_NDF_SIREN_2D
+    elif model_type in ["G-NDF-2D-SIREN", "G-NDF-SIREN"]:
+        from .gndf_siren import G_NDF_SIREN
         n_layers, n_hidden, n_points_per_link, base_position, link_lengths = data["meta"]
-        model = G_NDF_SIREN_2D(
+        model = G_NDF_SIREN(
             n_layers=n_layers,
             n_hidden=n_hidden,
             n_points_per_link=n_points_per_link,
@@ -87,8 +87,8 @@ def select_model(name, DIM, n_layers, n_hidden, **kwargs):
             )
         
         case "gndf_siren":
-            from .gndf_siren_2d import G_NDF_SIREN_2D
-            return G_NDF_SIREN_2D(
+            from .gndf_siren import G_NDF_SIREN
+            return G_NDF_SIREN(
                 n_layers, 
                 n_hidden, 
                 n_points_per_link=kwargs.get("n_points_per_link", 2),

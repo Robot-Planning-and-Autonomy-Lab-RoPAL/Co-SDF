@@ -53,7 +53,6 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
         rrt_time = time.perf_counter() - rrt_start
         if path_raw is None:
             print("FAILED")
-            # Strictly use args.samples as denominator: record failure for all
             results["RRT"].append({
                 "solve success": False, "gt success": False, 
                 "path length": 0.0, 
@@ -71,10 +70,7 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
             continue
         print("OK")
         
-        # Evaluate RRT Baseline
-        # print(f"  -> Evaluating RRT Baseline ... ", end="", flush=True)
         ev_rrt = evaluator.evaluate(path_raw)
-        # print(f"Done (Safe: {ev_rrt['success']})")
         results["RRT"].append({
             "solve success": True,
             "gt success": ev_rrt["success"],
@@ -98,7 +94,6 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
         for m_idx, (m_name, planner) in enumerate(methods):
             for s_idx, s_name in enumerate(solvers):
                 key = f"{m_name}-{s_name}"
-                # print(f"  -> Testing {key:<12} ... ", end="", flush=True)
                 if seed is not None:
                     set_all_seeds(seed + i * 1000 + m_idx * 100 + s_idx)
 
@@ -119,8 +114,6 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
 
                     success, path_opt, t, _ = planner.solve(**solve_kwargs)
                     ev = evaluator.evaluate(path_opt)
-                            
-                    # print(f"Done (GT Safe: {ev['success']}, SolveOK: {success}, Time: {t:.2f}s)")
                     results[key].append({
                         "solve success": bool(success),
                         "gt success": ev["success"],
@@ -141,7 +134,6 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
                         "time": 0.0
                     })
 
-    # Summary Table
     table_lines = []
     def log_and_print(s):
         print(s)
@@ -160,7 +152,6 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
             log_and_print(f"{key:<20} | {'N/A':<8} | {'--':<10} | {'--':<10} | {'--':<10}")
             continue
         
-        # Use nanmean to avoid pollution from failed samples
         sr = np.nanmean([float(d["gt success"]) for d in data]) * 100
         avg_len = np.nanmean([d["path length"] for d in data])
         avg_clr = np.nanmean([d["min clearance"] for d in data])
@@ -196,12 +187,10 @@ if __name__ == "__main__":
     save_dir = "output/benchmark"
     os.makedirs(save_dir, exist_ok=True)
 
-    # Save JSON for data analysis
     json_path = os.path.join(save_dir, f"summary_{args.world}.json")
     with open(json_path, "w") as f:
         json.dump({"config": vars(args), "stats": results}, f, indent=4)
-         
-    # Save TXT for human reading
+
     txt_path = os.path.join(save_dir, f"summary_{args.world}.txt")
     with open(txt_path, "w") as f:
         f.write(summary_text)

@@ -185,10 +185,10 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Multi-Solver Benchmark: NDF vs Workspace SDF")
     parser.add_argument("--world", type=str, default="obs10", help="Scene name")
-    parser.add_argument("--samples", type=int, default=100, help="Number of RRT paths to test")
+    parser.add_argument("--samples", type=int, default=1, help="Number of RRT paths to test")
     parser.add_argument("--seed", type=int, default=42, help="Base random seed")
     parser.add_argument("--n_waypoints", type=int, default=30, help="Number of waypoints")
-    parser.add_argument("--safety_margin", type=float, default=0.02, help="Safety margin")
+    parser.add_argument("--safety_margin", type=float, default=0.005, help="Safety margin")
     parser.add_argument("--max_iter", type=int, default=200, help="Max iterations per solve")
     args = parser.parse_args()
 

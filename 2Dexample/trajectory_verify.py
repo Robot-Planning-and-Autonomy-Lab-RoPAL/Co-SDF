@@ -22,7 +22,27 @@ def densify_path(path: np.ndarray, n_interp: int) -> np.ndarray:
         out.append(q2)
     return np.asarray(out)
 
-class TrajectoryEvaluator2D:
+def resample_path(path: np.ndarray, n_points: int) -> np.ndarray:
+    """
+    Resample path to be equidistant with exactly n_points.
+    """
+    if len(path) < 2:
+        return np.tile(path[0], (n_points, 1))
+        
+    diffs = np.linalg.norm(path[1:] - path[:-1], axis=1)
+    cum_dist = np.concatenate(([0], np.cumsum(diffs)))
+    total_dist = cum_dist[-1]
+    
+    if total_dist < 1e-8:
+        return np.tile(path[0], (n_points, 1))
+        
+    target_dist = np.linspace(0, total_dist, n_points)
+    new_path = np.zeros((n_points, path.shape[1]))
+    for i in range(path.shape[1]):
+        new_path[:, i] = np.interp(target_dist, cum_dist, path[:, i])
+    return new_path
+
+class TrajectoryEvaluator:
     """
     Unified evaluator for 2D trajectories.
     Aligned with 7D Franka evaluator pattern but native to 2D robot_tools.
@@ -37,12 +57,9 @@ class TrajectoryEvaluator2D:
         return not any(fp.intersect(o) for o in self.problem.workspace.obstacles)
 
     def evaluate(self, path, solve_time=0.0):
-        target_points = 128
-        if len(path) < target_points:
-            n_interp = max(1, (target_points - len(path)) // (len(path) - 1) + 1)
-            dense = densify_path(path, n_interp)
-        else:
-            dense = path
+        target_points = 512
+        # Always resample to exactly target_points equidistantly
+        dense = resample_path(np.asarray(path), target_points)
             
         # 1. Path Length
         diffs = dense[1:] - dense[:-1]
@@ -67,7 +84,8 @@ class TrajectoryEvaluator2D:
         
         # 4. Smoothness (Normalized Second-Difference)
         if len(dense) > 2:
-            h = 1.0 / (target_points - 1)
+            # Use actual spacing of the densified path for correct physical acceleration
+            h = 1.0 / (len(dense) - 1)
             # (q_{i+1} - 2q_i + q_{i-1}) / h^2
             accel_norms = np.linalg.norm((dense[2:] - 2*dense[1:-1] + dense[:-2]) / (h**2), axis=1)
             sm_mean = float(np.mean(accel_norms))
@@ -84,30 +102,3 @@ class TrajectoryEvaluator2D:
             "smoothness_p95": sm_p95,
             "solve_time": solve_time
         }
-
-def verify_trajectory(path_file, world_yaml):
-    """Load path and scene from files, then check for collisions."""
-    print(f"Loading path from {path_file}...")
-    path = np.load(path_file)
-    print(f"Path has {len(path)} waypoints, DOF: {path.shape[1]}")
-    
-    evaluator = TrajectoryEvaluator2D(world_yaml)
-    res = evaluator.evaluate(path)
-    
-    print("\n[Evaluation Results]")
-    print(f"  Safe: {res['success']}")
-    print(f"  Path Length: {res['path_length']:.4f}")
-    print(f"  Min Clearance: {res['min_clearance']:.4f}")
-    print(f"  Smoothness (Mean): {res['smoothness']:.2f}")
-    print(f"  Smoothness (P95):  {res['smoothness_p95']:.2f}")
-    
-    return res['success']
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="2D Trajectory Verifier")
-    parser.add_argument("--path", default="output/traj/ndf.npy", help="Path .npy file")
-    parser.add_argument("--world", default="config/block_world1.yaml", help="World .yaml file")
-    args = parser.parse_args()
-
-    ok = verify_trajectory(args.path, args.world)
-    exit(0 if ok else 1)

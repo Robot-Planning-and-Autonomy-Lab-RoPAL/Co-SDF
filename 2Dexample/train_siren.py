@@ -32,9 +32,7 @@ if __name__ == "__main__":
     )
     
     # dataset parameters
-    parser.add_argument("--dataset", type=str, default="block_world20", help="prefix of dataset files")
-    parser.add_argument("--data", type=str, default="inputs/block_world20", help="directory where npy files are stored")    
-    parser.add_argument("--output-name", type=str, default="block_world20_siren", help="custom output folder name")
+    parser.add_argument("--world", type=str, default="obs10", help="name of the world")
     parser.add_argument("--n-hidden", type=int, default=256, help="size of the layers")
     parser.add_argument("--n-layers", type=int, default=5, help="number of layers")
     parser.add_argument("--model", type=str, default="gndf_siren", help="model type")
@@ -55,7 +53,10 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    device = "cpu" if args.cpu else get_device()
+    data = f"inputs/{args.world}"
+    output_name = f"{args.world}_siren"
+    device = get_device()
+    print("Using device:", device)
     
     #### Config ####
     config = SimpleNamespace(
@@ -67,15 +68,15 @@ if __name__ == "__main__":
         eikonal_weight = args.eikonal_weight,
         optimizer = "adam",
         learning_rate = args.learning_rate,
-        output_folder = os.path.join("output", args.output_name)
+        output_folder = os.path.join("output", output_name)
     )
     os.makedirs(config.output_folder, exist_ok=True)
     print("DEVICE:", config.device)
     
     #### Load train set ####
     # For Eikonal training, we combine IN and OUT points with -1/1 targets
-    X_in = np.load(os.path.join(args.data, f"{args.dataset}_Xtrain_in.npy"))
-    X_out = np.load(os.path.join(args.data, f"{args.dataset}_Xtrain_out.npy"))
+    X_in = np.load(os.path.join(data, f"{args.world}_Xtrain_in.npy"))
+    X_out = np.load(os.path.join(data, f"{args.world}_Xtrain_out.npy"))
     
     X_all = np.vstack([X_in, X_out])
     Y_all = np.vstack([-np.ones((X_in.shape[0], 1)), np.ones((X_out.shape[0], 1))])
@@ -87,8 +88,8 @@ if __name__ == "__main__":
     print(f"Loaded dataset: {X_all.shape[0]} points (In: {X_in.shape[0]}, Out: {X_out.shape[0]})")
     
     #### Load test set ####
-    X_test_path = os.path.join(args.data, f"{args.dataset}_Xtest.npy")
-    Y_test_path = os.path.join(args.data,f"{args.dataset}_Ytest.npy")
+    X_test_path = os.path.join(data, f"{args.world}_Xtest.npy")
+    Y_test_path = os.path.join(data,f"{args.world}_Ytest.npy")
     test_loader = None
     if os.path.exists(X_test_path) and os.path.exists(Y_test_path):
         X_test = torch.Tensor(np.load(X_test_path)).to(config.device)

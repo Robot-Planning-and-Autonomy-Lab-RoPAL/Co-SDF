@@ -6,18 +6,18 @@ import os
 
 # Import geometry tools from parent directory
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
-from geometry_tools_2d import ControlPointManager2D
+from geometry import ControlPoint
 from common.models.siren import SirenNet
-from common.models.gndf_2d import GNDF_Preprocessing_2D
+from common.models.gndf import GNDF
 
-def G_NDF_SIREN_2D(n_layers=5, n_hidden=128, n_points_per_link=2,
+def G_NDF_SIREN(n_layers=5, n_hidden=128, n_points_per_link=2,
                   base_position=[5.0, 5.0], 
                   link_lengths=[2.1, 2.1], device="cuda"):
     """
     Model builder for G-NDF 2D using SIREN backbone.
     """
     # 1. Preprocessing (Same as GNDF_2D)
-    preprocess = GNDF_Preprocessing_2D(
+    preprocess = GNDF(
         n_points_per_link=n_points_per_link,
         base_position=base_position,
         link_lengths=link_lengths,
@@ -44,15 +44,7 @@ def G_NDF_SIREN_2D(n_layers=5, n_hidden=128, n_points_per_link=2,
     ).to(device)
     
     # Standard metadata tags
-    model.id = "G-NDF-2D-SIREN"
+    model.id = "G-NDF-SIREN"
     model.meta = [n_layers, n_hidden, n_points_per_link, base_position, link_lengths]
     
     return model
-
-if __name__ == "__main__":
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = G_NDF_SIREN_2D(device=device)
-    print(f"Model ID: {model.id}")
-    q = torch.randn(10, 2).to(device)
-    out = model(q)
-    print(f"Input (10, 2) -> Output shape: {out.shape}")

@@ -8,19 +8,13 @@ from ndf_casadi import CasADiPlanner
 from sdf_planner import WorkspaceSDFPlanner
 from trajectory_verify import TrajectoryEvaluator
 
-def global_optimization(seed, sence, model, solver, n_waypoints, safety_margin, max_iter, device):
-
-    if seed is not None:
-        np.random.seed(seed)
-        import random
-        random.seed(seed)
+def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_iter, device):
 
     device = get_device()
     device_str = str(device).split(':')[0]
     
     print("="*80)
     print(f"RRT + GLOBAL TRAJECTORY OPTIMIZATION (GT METRICS)")
-    if seed is not None: print(f"SEED: {seed}")
     print("="*80)
     
     print("\n[1] Generating RRT path...")
@@ -135,13 +129,11 @@ def resample_path(path, n_points):
     
     return new_path
 
-
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--world", type=str, default="obs20", help="Scene name")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed")
-    parser.add_argument("--solver", type=str, choices=['ipopt', 'osqp', 'qpoases'], default="osqp", help="Solver type")
+    parser.add_argument("--solver", type=str, choices=['ipopt', 'osqp', 'qpoases'], default="ipopt", help="Solver type")
     parser.add_argument("--n_waypoints", type=int, default=30, help="Number of waypoints")
     parser.add_argument("--safety_margin", type=float, default=0.02, help="Safety margin")
     parser.add_argument("--max_iter", type=int, default=200, help="Max iterations per solve")
@@ -154,7 +146,6 @@ if __name__ == "__main__":
     print("Using device: ", device)
 
     global_optimization(
-        seed=args.seed, 
         sence=sence, 
         model=model, 
         solver=args.solver, 

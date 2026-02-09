@@ -28,9 +28,9 @@ class WorkspaceSDFPlanner:
             name="workspace_grid_sdf"
         )
     
-    def solve(self, start, goal, initial_path=None, solver='ipopt', 
+    def solve(self, start, goal, solver='ipopt', initial_path=None, 
               safety_margin=0.02, verbose=False, v_max=1.5, a_max=3.0, dt=0.1, 
-              n_waypoints=None, max_iter=50, w_coll=1e5, w_clr=1.0):
+              n_waypoints=None, max_iter=50, w_clr=1.0):
         if initial_path is not None:
             n = initial_path.shape[0]
         else:
@@ -53,23 +53,17 @@ class WorkspaceSDFPlanner:
         diff2 = Q[2:, :] + Q[:-2, :] - 2*Q[1:-1, :]
         cost_smooth = (1.0*ca.sumsqr(diff1) + 20.0*ca.sumsqr(diff2))/n
         
-        # --- 2. Active Clearance / Collision Constraints ---
+        # --- 2. Active Clearance / Hard Collision Constraints ---
         sdf_dists = self.l4c_sdf(Q)
         
-        # Use Slack Variables for Robustness (Soft Constraints)
-        slack = opti.variable(n)
-        opti.subject_to(slack >= 0)
-        opti.set_initial(slack, 0.0)
-        
-        # Violation cost (Hinge Loss)
-        # Using quadratic penalty for smoother gradients compared to exp
-        violation = ca.fmax(0.0, safety_margin - sdf_dists)
-        cost_clearance = w_clr * ca.sumsqr(violation)
-        
-        # Penalize slack heavily to keep it close to zero if possible
-        cost_slack = 1e6 * ca.sumsqr(slack)
+        # Strict hard constraints: NO slacks
+        opti.subject_to(sdf_dists >= safety_margin)
+
+        # Active Clearance Objective (Repulsion Force) - Align with NDF
+        z = ca.fmin(50, -sdf_dists / safety_margin)
+        cost_clearance = w_clr * ca.sum1(ca.exp(z))
             
-        opti.minimize(cost_smooth + cost_clearance + cost_slack)
+        opti.minimize(cost_smooth + cost_clearance)
         
         opti.subject_to(Q[0, :].T == ca.DM(start))
         opti.subject_to(Q[-1, :].T == ca.DM(goal))
@@ -77,10 +71,7 @@ class WorkspaceSDFPlanner:
         for j in range(7):
             opti.subject_to(opti.bounded(self.lower[j], Q[:, j], self.upper[j]))
         
-        # Soft constraint: dist + slack >= margin
-        opti.subject_to(sdf_dists + slack >= safety_margin)
-        
-        # Velocity and Acceleration limits (aligned with NDF planner)
+        # Joint Limits
         opti.subject_to(opti.bounded(-v_max * dt, diff1, v_max * dt))
         opti.subject_to(opti.bounded(-a_max * dt**2, diff2, a_max * dt**2))
         

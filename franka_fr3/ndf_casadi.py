@@ -38,7 +38,7 @@ class CasADiPlanner:
             self.l4c_models[n] = model
         return self.l4c_models[n]
 
-    def solve(self, start, goal, formulation='hard', solver='ipopt', initial_path=None, 
+    def solve(self, start, goal, formulation='relaxed', solver='ipopt', initial_path=None, 
               safety_margin=0.02, verbose=False, v_max=1.5, a_max=3.0, dt=0.1, 
               n_waypoints=None, max_iter=50, w_coll=1e5, w_clr=1.0):
         """

@@ -40,7 +40,7 @@ class CasADiPlanner:
 
     def solve(self, start, goal, formulation='hard', solver='ipopt', initial_path=None, 
               safety_margin=0.02, verbose=False, v_max=1.5, a_max=3.0, dt=0.1, 
-              n_waypoints=None, max_iter=50, w_coll=1e5, w_clr=1.0):
+              n_waypoints=None, max_iter=50, w_coll=1e5, w_clr=0.1):
         """
         Solve the path optimization problem.
         

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 import os
-import argparse
-import numpy as np
 import torch
+import argparse
+import robot_tools
+import numpy as np
 from rrt import RRT
 from common.utils import get_device
 from ndf_casadi import CasADiPlanner
 from sdf_planner import WorkspaceSDFPlanner
-import trajectory_verify
-import robot_tools
+from trajectory_verify import TrajectoryEvaluator
+
 
 def global_optimization(seed, sence, model, solver, n_waypoints, safety_margin, max_iter, device):
 
@@ -58,7 +59,7 @@ def global_optimization(seed, sence, model, solver, n_waypoints, safety_margin, 
     print(f"{'='*80}")
     
     ndf_planner = CasADiPlanner(model, sence, device=device_str)
-    evaluator = trajectory_verify.TrajectoryEvaluator2D(sence, device=device_str)
+    evaluator = TrajectoryEvaluator(sence, device=device_str)
 
     def get_metrics_and_print(path, name, solve_time=0.0):
         m = evaluator.evaluate(path, solve_time=solve_time)
@@ -119,6 +120,12 @@ def global_optimization(seed, sence, model, solver, n_waypoints, safety_margin, 
     np.save(f"{save_dir}/ndf.npy", path_ndf)
     np.save(f"{save_dir}/sdf.npy", path_ws)
 
+    # Explicitly cleanup to avoid double free in some environments
+    del ndf_planner
+    del ws_planner
+    import gc
+    gc.collect()
+
 
 def resample_path(path, n_points):
     diffs = np.linalg.norm(path[1:] - path[:-1], axis=1)
@@ -134,10 +141,10 @@ def resample_path(path, n_points):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--world", type=str, default="obs10", help="Scene name")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--seed", type=int, default=555, help="Random seed")
     parser.add_argument("--solver", type=str, choices=['ipopt', 'osqp', 'qpoases'], default="ipopt", help="Solver type")
     parser.add_argument("--n_waypoints", type=int, default=30, help="Number of waypoints")
-    parser.add_argument("--safety_margin", type=float, default=0.01, help="Safety margin")
+    parser.add_argument("--safety_margin", type=float, default=0.005, help="Safety margin")
     parser.add_argument("--max_iter", type=int, default=200, help="Max iterations per solve")
     args = parser.parse_args()
 

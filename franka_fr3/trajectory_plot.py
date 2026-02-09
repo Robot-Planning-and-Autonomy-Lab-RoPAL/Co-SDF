@@ -86,10 +86,7 @@ def render_trajectory_gif(path_file, scene_xml, output_file, fps=30, width=640, 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Render Franka trajectory as GIF/MP4")
-    parser.add_argument("--path", default="output/traj/ndf.npy", help="Path .npy file (T,7)")
-    parser.add_argument("--scene", default="scenes/obs10.xml", help="Scene XML file")
-    parser.add_argument("--output-far", default="output/traj/ndf_far.gif", help="Output file for far view")
-    parser.add_argument("--output-front", default="output/traj/ndf_front.gif", help="Output file for front view")
+    parser.add_argument("--scene", default="scenes/obs20.xml", help="Scene XML file")
     parser.add_argument("--fps", type=int, default=10, help="Frames per second (default: 20)")
     parser.add_argument("--width", type=int, default=640, help="Render width (max 640)")
     parser.add_argument("--height", type=int, default=480, help="Render height")
@@ -98,11 +95,27 @@ if __name__ == "__main__":
     parser.add_argument("--elevation", type=float, default=-20, help="Camera elevation for far view")
     args = parser.parse_args()
     
-    # Generate far view
+    rrt_dir = "output/traj/rrt.npy"
+    ndf_dir = "output/traj/ndf.npy"
+    sdf_dir = "output/traj/sdf.npy"
+
+    rrt_output_far = "output/traj/rrt_far.gif"
+    rrt_output_front = "output/traj/rrt_front.gif"
+    ndf_output_far = "output/traj/ndf_far.gif"
+    ndf_output_front = "output/traj/ndf_front.gif"
+    sdf_output_far = "output/traj/sdf_far.gif"
+    sdf_output_front = "output/traj/sdf_front.gif"
+
     print("="*60)
     print(f"Generating FAR view ({args.azimuth}°, {args.elevation}°)...")
     print("="*60)
-    render_trajectory_gif(args.path, args.scene, args.output_far, 
+    render_trajectory_gif(rrt_dir, args.scene, rrt_output_far, 
+                         fps=args.fps, width=args.width, height=args.height,
+                         camera_distance=args.distance, azimuth=args.azimuth, elevation=args.elevation)
+    render_trajectory_gif(ndf_dir, args.scene, ndf_output_far, 
+                         fps=args.fps, width=args.width, height=args.height,
+                         camera_distance=args.distance, azimuth=args.azimuth, elevation=args.elevation)
+    render_trajectory_gif(sdf_dir, args.scene, sdf_output_far, 
                          fps=args.fps, width=args.width, height=args.height,
                          camera_distance=args.distance, azimuth=args.azimuth, elevation=args.elevation)
     
@@ -110,12 +123,18 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("Generating FRONT view (0°, -20°)...")
     print("="*60)
-    render_trajectory_gif(args.path, args.scene, args.output_front, 
+    render_trajectory_gif(rrt_dir, args.scene, rrt_output_front, 
+                         fps=args.fps, width=args.width, height=args.height,
+                         camera_distance=args.distance, azimuth=0, elevation=-20)
+    render_trajectory_gif(ndf_dir, args.scene, ndf_output_front, 
+                         fps=args.fps, width=args.width, height=args.height,
+                         camera_distance=args.distance, azimuth=0, elevation=-20)
+    render_trajectory_gif(sdf_dir, args.scene, sdf_output_front, 
                          fps=args.fps, width=args.width, height=args.height,
                          camera_distance=args.distance, azimuth=0, elevation=-20)
     
     print("\n" + "="*60)
     print("✓ Both views generated successfully!")
-    print(f"  Far view:   {args.output_far}")
-    print(f"  Front view: {args.output_front}")
+    print(f"  Far view:   {rrt_output_far}")
+    print(f"  Front view: {rrt_output_front}")
     print("="*60)
