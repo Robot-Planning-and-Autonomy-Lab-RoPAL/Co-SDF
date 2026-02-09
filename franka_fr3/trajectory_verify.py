@@ -186,11 +186,25 @@ class TrajectoryEvaluator:
         # 3. Min Clearance
         # Only compute clearance if needed (it's the most expensive check)
         min_clearance = self._compute_gt_clearance(dense)
+        
+        # 4. Smoothness (Normalized Second-Difference / Curvature Proxy)
+        # Using 512-point resolution for consistent benchmarking
+        if len(dense) > 2:
+            h = 1.0 / (target_points - 1)
+            # Normalized Second Difference: (q_{i+1} - 2q_i + q_{i-1}) / h^2
+            accel_norms = np.linalg.norm((dense[2:] - 2*dense[1:-1] + dense[:-2]) / (h**2), axis=1)
+            sm_mean = float(np.mean(accel_norms))
+            sm_p95 = float(np.percentile(accel_norms, 95))
+        else:
+            sm_mean = 0.0
+            sm_p95 = 0.0
 
         return {
             "success": success,
             "path_length": path_length,
             "min_clearance": min_clearance,
+            "smoothness": sm_mean,
+            "smoothness_p95": sm_p95,
             "solve_time": solve_time
         }
     
@@ -215,35 +229,29 @@ class TrajectoryEvaluator:
                     g_pos = self.mj_model.geom_pos[geom_id]
                     g_size = self.mj_model.geom_size[geom_id]
                     g_type = self.mj_model.geom_type[geom_id]
-                    # Note: quat is ignored for spheres, but needed for boxes/cylinders
                     g_quat = self.mj_model.geom_quat[geom_id]
                     
+                    # Transform point to local frame
+                    rel_pt = point - g_pos
+                    neg_quat = np.zeros(4)
+                    mujoco.mju_negQuat(neg_quat, g_quat)
+                    local_pt = np.zeros(3)
+                    mujoco.mju_rotVecQuat(local_pt, rel_pt, neg_quat)
+
                     dist = 1.0
                     if g_type == mujoco.mjtGeom.mjGEOM_SPHERE:
-                        dist = np.linalg.norm(point - g_pos) - g_size[0]
+                        dist = np.linalg.norm(local_pt) - g_size[0]
                     
                     elif g_type == mujoco.mjtGeom.mjGEOM_PLANE:
-                        # Simple Z-plane assumes pos is 0,0,Z
                         dist = point[2] - g_pos[2]
                         
                     elif g_type == mujoco.mjtGeom.mjGEOM_BOX:
-                        # Transform point to box local frame
-                        local_pt = point - g_pos
-                        if not np.allclose(g_quat, [1, 0, 0, 0]):
-                            # Very simplified rotation if needed, but boxes in these scenes
-                            # are often axis-aligned or handled by MuJoCo. 
-                            # For ground truth, we'll use a slightly safer box-distance approximation:
-                            q = np.abs(local_pt) - g_size
-                            dist = np.linalg.norm(np.maximum(q, 0)) + min(np.max(q), 0)
-                        else:
-                            q = np.abs(local_pt) - g_size
-                            dist = np.linalg.norm(np.maximum(q, 0)) + min(np.max(q), 0)
+                        q = np.abs(local_pt) - g_size
+                        dist = np.linalg.norm(np.maximum(q, 0)) + min(np.max(q), 0)
                     
                     elif g_type == mujoco.mjtGeom.mjGEOM_CYLINDER:
-                        # Radius g_size[0], Half-height g_size[1]
-                        v = point - g_pos
-                        dist_h = np.abs(v[2]) - g_size[1]
-                        dist_r = np.linalg.norm(v[:2]) - g_size[0]
+                        dist_h = np.abs(local_pt[2]) - g_size[1]
+                        dist_r = np.linalg.norm(local_pt[:2]) - g_size[0]
                         dist = np.maximum(dist_h, dist_r)
                     
                     if dist < min_dist:

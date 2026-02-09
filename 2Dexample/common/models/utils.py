@@ -1,13 +1,13 @@
 import torch
 from .sll import DenseSDP
 import torch.nn as nn
+from .gndf import G_NDF
 
 class PeriodicEmbedding(nn.Module):
     def __init__(self, frequencies=[1, 2, 4, 8]):
         super().__init__()
         self.frequencies = frequencies
     def forward(self, x):
-        # x: (B, DIM)
         embeddings = []
         for f in self.frequencies:
             embeddings.append(torch.cos(f * x))
@@ -26,11 +26,9 @@ def load_model(path, device:str):
     model_type = data.get("id","Spectral")
     if model_type == "SDP":
         model = DenseSDP(*data["meta"])
-    elif model_type == "G-NDF-2D":
-        from .gndf_2d import G_NDF_2D
-        # meta format: [n_layers, n_hidden, n_points_per_link, frequencies (unused), base_position, link_lengths]
-        n_layers, n_hidden, n_points_per_link, _freqs_unused, base_position, link_lengths = data["meta"]
-        model = G_NDF_2D(
+    elif model_type == "GNDF":
+        n_layers, n_hidden, n_points_per_link, _unused, base_position, link_lengths = data["meta"]
+        model = G_NDF(
             n_layers=n_layers,
             n_hidden=n_hidden,
             n_points_per_link=n_points_per_link,
@@ -40,7 +38,6 @@ def load_model(path, device:str):
         )
     elif model_type == "G-NDF-2D-SIREN":
         from .gndf_siren_2d import G_NDF_SIREN_2D
-        # meta format: [n_layers, n_hidden, n_points_per_link, base_position, link_lengths]
         n_layers, n_hidden, n_points_per_link, base_position, link_lengths = data["meta"]
         model = G_NDF_SIREN_2D(
             n_layers=n_layers,
@@ -80,8 +77,7 @@ def select_model(name, DIM, n_layers, n_hidden, **kwargs):
             return PhaseNet(DIM, n_hidden, n_layers, FF=kwargs.get("FF", False), skip_in=(4,))
 
         case "gndf":
-            from .gndf_2d import G_NDF_2D
-            return G_NDF_2D(
+            return G_NDF(
                 n_layers, 
                 n_hidden, 
                 n_points_per_link=kwargs.get("n_points_per_link", 2),

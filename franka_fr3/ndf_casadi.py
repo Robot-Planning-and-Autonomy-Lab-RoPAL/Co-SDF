@@ -177,7 +177,8 @@ class CasADiPlanner:
         except Exception as e:
             stats["exception"] = True
             stats["return_status"] = str(e)
-            if verbose: print(f"Optimization failed ({formulation}_{solver}): {e}")
+            if verbose: 
+                print(f"Optimization failed ({formulation}_{solver}): {e}")
             
             # CRITICAL: Return the best iterate found so far (even if not converged)
             # rather than reverting to the initial path.

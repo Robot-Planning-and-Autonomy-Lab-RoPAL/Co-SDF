@@ -26,7 +26,7 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
     device = get_device()
     device_str = str(device).split(':')[0]
 
-    print("\nInitializing Planners and Evaluator...")
+    ("\nInitializing Planners and Evaluator...")
     ndf_planner = CasADiPlanner(model, scene, device=device_str)
     sdf_planner = WorkspaceSDFPlanner(scene, grid_resolution=64, device=device_str)
     evaluator = TrajectoryEvaluator(scene, model=ndf_planner.opt_base.model, device=device_str)
@@ -72,14 +72,16 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
         print("OK")
         
         # Evaluate RRT Baseline
-        print(f"  -> Evaluating RRT Baseline ... ", end="", flush=True)
+        # print(f"  -> Evaluating RRT Baseline ... ", end="", flush=True)
         ev_rrt = evaluator.evaluate(path_raw)
-        print(f"Done (Safe: {ev_rrt['success']})")
+        # print(f"Done (Safe: {ev_rrt['success']})")
         results["RRT"].append({
             "solve success": True,
             "gt success": ev_rrt["success"],
             "path length": ev_rrt["path_length"],
             "min clearance": ev_rrt["min_clearance"],
+            "smoothness": ev_rrt["smoothness"],
+            "smoothness_p95": ev_rrt["smoothness_p95"],
             "time": rrt_time
         })
         
@@ -96,7 +98,7 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
         for m_idx, (m_name, planner) in enumerate(methods):
             for s_idx, s_name in enumerate(solvers):
                 key = f"{m_name}-{s_name}"
-                print(f"  -> Testing {key:<12} ... ", end="", flush=True)
+                # print(f"  -> Testing {key:<12} ... ", end="", flush=True)
                 if seed is not None:
                     set_all_seeds(seed + i * 1000 + m_idx * 100 + s_idx)
 
@@ -118,12 +120,14 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
                     success, path_opt, t, _ = planner.solve(**solve_kwargs)
                     ev = evaluator.evaluate(path_opt)
                             
-                    print(f"Done (GT Safe: {ev['success']}, SolveOK: {success}, Time: {t:.2f}s)")
+                    # print(f"Done (GT Safe: {ev['success']}, SolveOK: {success}, Time: {t:.2f}s)")
                     results[key].append({
                         "solve success": bool(success),
                         "gt success": ev["success"],
                         "path length": ev["path_length"],
                         "min clearance": ev["min_clearance"],
+                        "smoothness": ev["smoothness"],
+                        "smoothness_p95": ev["smoothness_p95"],
                         "time": t
                     })
                 except Exception as e:
@@ -132,6 +136,8 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
                         "solve success": False, "gt success": False,
                         "path length": 0.0, 
                         "min clearance": 0.0, 
+                        "smoothness": 0.0,
+                        "smoothness_p95": 0.0,
                         "time": 0.0
                     })
 
@@ -141,11 +147,11 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
         print(s)
         table_lines.append(s)
 
-    log_and_print(f"\n{'='*120}")
+    log_and_print(f"{'='*140}")
     log_and_print(f"FINAL BENCHMARK SUMMARY (Scene: {world}, Samples: {samples})")
-    log_and_print(f"{'='*120}")
-    log_and_print(f"{'Method-Solver':<20} | {'Safe%':<8} | {'Avg Len':<10} | {'Avg Clr':<10} | {'Avg Time':<10}")
-    log_and_print(f"{'-'*120}")
+    log_and_print(f"{'='*140}")
+    log_and_print(f"{'Method-Solver':<20} | {'Safe%':<8} | {'Avg Len':<9} | {'Avg Clr':<9} | {'Sm_mean':<9} | {'Sm_p95':<9} | {'Avg Time':<10}")
+    log_and_print(f"{'-'*140}")
     
     sorted_keys = ["RRT"] + sorted([k for k in results.keys() if k != "RRT"])
     for key in sorted_keys:
@@ -158,18 +164,20 @@ def run_benchmark(world, samples, seed, n_waypoints, safety_margin, max_iter):
         sr = np.nanmean([float(d["gt success"]) for d in data]) * 100
         avg_len = np.nanmean([d["path length"] for d in data])
         avg_clr = np.nanmean([d["min clearance"] for d in data])
+        avg_sm = np.nanmean([d["smoothness"] for d in data])
+        avg_p95 = np.nanmean([d["smoothness_p95"] for d in data])
         avg_time = np.nanmean([d["time"] for d in data])
         
-        log_and_print(f"{key:<20} | {sr:>7.1f}% | {avg_len:>9.3f} | {avg_clr:>9.4f} | {avg_time:>9.2f}s")
+        log_and_print(f"{key:<20} | {sr:>7.1f}% | {avg_len:>9.3f} | {avg_clr:>9.4f} | {avg_sm:>9.2f} | {avg_p95:>9.2f} | {avg_time:>9.2f}s")
     
-    log_and_print(f"{'='*120}\n")
+    log_and_print(f"{'='*140}\n")
 
     return results, "\n".join(table_lines)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Multi-Solver Benchmark: NDF vs Workspace SDF")
-    parser.add_argument("--world", type=str, default="obs20", help="Scene name")
-    parser.add_argument("--samples", type=int, default=1, help="Number of RRT paths to test")
+    parser.add_argument("--world", type=str, default="obs30", help="Scene name")
+    parser.add_argument("--samples", type=int, default=100, help="Number of RRT paths to test")
     parser.add_argument("--seed", type=int, default=42, help="Base random seed")
     parser.add_argument("--n_waypoints", type=int, default=30, help="Number of waypoints")
     parser.add_argument("--safety_margin", type=float, default=0.02, help="Safety margin")

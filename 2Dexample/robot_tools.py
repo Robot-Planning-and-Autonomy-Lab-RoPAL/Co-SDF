@@ -3,6 +3,7 @@ import polygon_tools as poly
 import csv
 import yaml
 import sys
+import math
 import matplotlib as plt
 from matplotlib.patches import Polygon as PlotPolygon
 from matplotlib.collections import PatchCollection
@@ -50,23 +51,78 @@ class Workspace2D(object):
                 break
         return collision
 
+    def get_clearance(self, obj):
+        """Returns the signed distance between a Polygon/Point and any obstacle.
+        Positive: outside, Negative: inside.
+        """
+        min_dist = 1e6
+        for o in self.obstacles:
+            if hasattr(obj, "to_polygon") and not isinstance(obj, poly.Polygon):
+                obj_poly = obj.to_polygon()
+            elif isinstance(obj, poly.Polygon):
+                obj_poly = obj
+            else:
+                obj_poly = None
+
+            if obj_poly is not None:
+                # Polygon-to-obstacle distance
+                dist = obj_poly.distance(o)
+                # For signed distance, we'd need to check if polygon is inside o
+                # Simple approximation: if any vertex is inside, it's negative
+                if dist == 0:
+                    # Find deepest penetration
+                    max_pen = 0
+                    for p in obj_poly:
+                        if isinstance(o, poly.Circle):
+                            pen = o.radius - math.sqrt((p.x - o.center.x)**2 + (p.y - o.center.y)**2)
+                        elif isinstance(o, poly.Polygon):
+                            if o.point_inside(p):
+                                pen = math.sqrt(min(poly.p_to_seg_dist_sq(p, v0, v1) for v0, v1 in o.edges()))
+                            else: pen = 0
+                        max_pen = max(max_pen, pen)
+                    dist = -max_pen
+            elif isinstance(obj, poly.Point):
+                # Point-to-obstacle signed distance
+                if isinstance(o, poly.Circle):
+                    dist = math.sqrt((obj.x - o.center.x)**2 + (obj.y - o.center.y)**2) - o.radius
+                elif isinstance(o, poly.Polygon):
+                    d2 = min(poly.p_to_seg_dist_sq(obj, v0, v1) for v0, v1 in o.edges())
+                    dist = math.sqrt(d2)
+                    if o.point_inside(obj):
+                        dist = -dist
+                else:
+                    dist = 1e6
+            else:
+                dist = 1e6
+                
+            if dist < min_dist:
+                min_dist = dist
+        return min_dist
+
     def plot(self, hax=None, cmap=cm.viridis):
+        from matplotlib.patches import Circle as PlotCircle
         if hax is None:
             f, hax = plt.subplots(1)
-        h_obs = []
+        
+        # Plot obstacles
         for o in self.obstacles:
-            h_obs.append(PlotPolygon(o, zorder=1))
-        c_obs = PatchCollection(h_obs, cmap=cmap)
-        # This sets colors for some reason (command in Polygon does not)
-        c_obs.set_array(np.linspace(0, 1.0, len(self.obstacles) + 1)[1:])
-        hax.add_collection(c_obs)
-
+            if isinstance(o, poly.Polygon):
+                pts = np.array([[p.x, p.y] for p in o])
+                hax.add_patch(PlotPolygon(pts, color='gray', alpha=0.5, zorder=1))
+            elif isinstance(o, poly.Circle):
+                hax.add_patch(PlotCircle((o.center.x, o.center.y), o.radius, color='gray', alpha=0.5, zorder=1))
+        
+        # Set limits
+        if hasattr(self, 'limits'):
+            hax.set_xlim(self.limits[0])
+            hax.set_ylim(self.limits[1])
+        else:
+            hax.set_xlim(0, 10)
+            hax.set_ylim(0, 10)
         hax.set_aspect('equal')
 
         hax.set_xlabel(r'$x$')
         hax.set_ylabel(r'$y$')
-        hax.set_xlim(self.limits[0])
-        hax.set_ylim(self.limits[1])
 
 
 class Robot2D(object):
@@ -118,7 +174,7 @@ class Robot2D(object):
 class RobotArm2D(object):
     _spine_pts = None
 
-    def __init__(self, base_position=[0.0, 0.0], link_lengths=[1.0, 1.0], link_angles=[0.0, 0.0]):
+    def __init__(self, base_position=[0.0, 0.0], link_lengths=[1.0, 1.0], link_angles=[0.0, 0.0], link_width=0.2, joint_limits=None):
         # Assume arm angles are relative (can be summed)
 
         self._base_position = poly.Point(base_position[0], base_position[1])
@@ -126,6 +182,13 @@ class RobotArm2D(object):
         assert len(link_lengths) == len(link_angles)
         self._link_lengths = np.array(link_lengths)
         self._link_angles = np.array(link_angles)
+        self._link_width = link_width
+        
+        if joint_limits is None:
+            # Default to [0, 2pi] for each joint to align with current "boxed" logic
+            self.joint_limits = np.array([[0.0, 2 * np.pi] for _ in range(len(link_lengths))])
+        else:
+            self.joint_limits = np.array(joint_limits)
 
         self._R = [np.eye(2) for i in self._link_angles]
         self._set_rotation_transforms()
@@ -142,8 +205,30 @@ class RobotArm2D(object):
         self._set_spine_points()
 
     def get_current_polygon(self):
-        # Run backwards through the points to make a polygon
-        return poly.Polygon(self._spine_pts + self._spine_pts[-2:0:-1])
+        # Generate a thick polygon by offsetting the spine
+        # Each link contributes its own start and end offset points
+        if self._link_width <= 0:
+            return poly.Polygon(self._spine_pts + self._spine_pts[-2:0:-1])
+            
+        pts_left = []
+        pts_right = []
+        
+        sum_angles = self._link_angles.cumsum()
+        for i, (p_start, p_end) in enumerate(zip(self._spine_pts[:-1], self._spine_pts[1:])):
+            angle = sum_angles[i]
+            nx = -np.sin(angle)
+            ny = np.cos(angle)
+            r = self._link_width / 2.0
+            
+            # Add both start and end offsets for THIS link
+            pts_left.append(poly.Point(p_start.x + nx * r, p_start.y + ny * r))
+            pts_left.append(poly.Point(p_end.x + nx * r, p_end.y + ny * r))
+            
+            pts_right.append(poly.Point(p_start.x - nx * r, p_start.y - ny * r))
+            pts_right.append(poly.Point(p_end.x - nx * r, p_end.y - ny * r))
+            
+        # Order: left points (base to tip), then right points (tip to base)
+        return poly.Polygon(pts_left + pts_right[::-1])
 
     def _set_spine_points(self):
         self._spine_pts = [self._base_position]
@@ -152,6 +237,35 @@ class RobotArm2D(object):
 
     def get_spine_points(self):
         return [p.x for p in self._spine_pts], [p.y for p in self._spine_pts]
+
+    def get_collision_shapes(self):
+        """Returns a list of shapes (Polygons and Circles) for collision detection."""
+        if self._link_width <= 0:
+            return [self.get_current_polygon()]
+            
+        shapes = []
+        r = self._link_width / 2.0
+        
+        # 1. Add joints as circles (including base and end-effector)
+        for pt in self._spine_pts:
+            shapes.append(poly.Circle(pt, r))
+            
+        # 2. Add links as rectangles
+        sum_angles = self._link_angles.cumsum()
+        for i, (p_start, p_end) in enumerate(zip(self._spine_pts[:-1], self._spine_pts[1:])):
+            angle = sum_angles[i]
+            nx = -np.sin(angle)
+            ny = np.cos(angle)
+            
+            # Corner points for the rectangle representing this link
+            p1 = poly.Point(p_start.x + nx * r, p_start.y + ny * r)
+            p2 = poly.Point(p_end.x + nx * r, p_end.y + ny * r)
+            p3 = poly.Point(p_end.x - nx * r, p_end.y - ny * r)
+            p4 = poly.Point(p_start.x - nx * r, p_start.y - ny * r)
+            
+            shapes.append(poly.Polygon([p1, p2, p3, p4]))
+            
+        return shapes
 
     def get_end_effector_position(self):
         return self._spine_pts[-1]
@@ -183,16 +297,26 @@ class PlanningProblem(object):
 
     def construct_config_space(self, nx=101):
         # TODO: This should be more general (number of dimensions, wraparound etc. in the robot class)
-        theta1, theta2 = np.linspace(0, 2.0 * np.pi, nx), np.linspace(0, 2.0 * np.pi, nx)
+        t1_lim, t2_lim = self.robot.joint_limits[0], self.robot.joint_limits[1]
+        theta1 = np.linspace(t1_lim[0], t1_lim[1], nx)
+        theta2 = np.linspace(t2_lim[0], t2_lim[1], nx)
         v = np.zeros((len(theta1), len(theta2)), dtype=int)
 
         for i, t1 in enumerate(theta1):
             for j, t2 in enumerate(theta2):
                 self.robot.set_link_angles([t1, t2])
                 in_obs = 0
-                fp = self.robot.get_current_polygon()
+                
+                # Check collision for all parts of the robot
+                collision_shapes = self.robot.get_collision_shapes()
+                
                 for o_num, o in enumerate(self.workspace.obstacles):
-                    if fp.intersect(o):
+                    collides = False
+                    for shape in collision_shapes:
+                        if shape.intersect(o):
+                            collides = True
+                            break
+                    if collides:
                         in_obs = o_num + 1
                         break
                 v[i, j] = in_obs

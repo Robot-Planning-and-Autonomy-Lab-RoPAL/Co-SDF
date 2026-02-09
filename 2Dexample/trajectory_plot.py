@@ -174,12 +174,24 @@ def render_gif(path_file, world_file, gif_file, nx, fps, shadows):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="2D path GIF renderer (arm-style)")
-    parser.add_argument("--path", type=str, default="output/traj/rrt.npy", help="Path .npy file (T,2)")
-    parser.add_argument("--world", type=str, default="config/block_world1.yaml", help="YAML world file")
-    parser.add_argument("--gif-out", type=str, default="output/rrt.gif", help="Output GIF path")
+    parser.add_argument("--path", type=str, default="sdf", help="Path")
+    parser.add_argument("--world", type=str, default="obs10", help="YAML world file")
+    parser.add_argument("--gif-out", type=str, default="output/sdf.gif", help="Output GIF path")
     parser.add_argument("--gif-nx", type=int, default=201, help="Config-space resolution for GIF background")
     parser.add_argument("--fps", type=int, default=15, help="GIF frames per second")
     parser.add_argument("--gif-shadows", type=int, default=0, help="Arm shadows every n steps (0 off)")
     args = parser.parse_args()
 
-    render_gif(args.path, args.world, args.gif_out, nx=args.gif_nx, fps=args.fps, shadows=args.gif_shadows)
+    rrt_dir = "output/traj/rrt.npy"
+    ndf_dir = "output/traj/ndf.npy"
+    sdf_dir = "output/traj/sdf.npy"
+
+    rrt_out = "output/traj/rrt.gif"
+    ndf_out = "output/traj/ndf.gif"
+    sdf_out = "output/traj/sdf.gif"
+
+    sence = "config/" + args.world + ".yaml" 
+
+    render_gif(rrt_dir, sence, rrt_out, nx=args.gif_nx, fps=args.fps, shadows=args.gif_shadows)
+    render_gif(ndf_dir, sence, ndf_out, nx=args.gif_nx, fps=args.fps, shadows=args.gif_shadows)
+    render_gif(sdf_dir, sence, sdf_out, nx=args.gif_nx, fps=args.fps, shadows=args.gif_shadows)

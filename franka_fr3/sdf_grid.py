@@ -22,7 +22,7 @@ class WorkspaceGridSDF(nn.Module):
         self.cp_manager = ControlPoint(device=device)
         
         if workspace_bounds is None:
-            workspace_bounds = [-0.8, 0.8, -0.8, 0.8, -0.2, 1.2]
+            workspace_bounds = [-1.0, 1.0, -1.0, 1.0, -0.2, 1.2]
         
         self.register_buffer('bounds', torch.tensor(workspace_bounds, device=device))
         self.grid_res = grid_resolution
@@ -62,23 +62,22 @@ class WorkspaceGridSDF(nn.Module):
         x = np.linspace(x_min, x_max, samples_per_dim)
         y = np.linspace(y_min, y_max, samples_per_dim)
         z = np.linspace(z_min, z_max, samples_per_dim)
-        
-        grid = np.zeros((samples_per_dim, samples_per_dim, samples_per_dim))
+        grid = np.zeros((samples_per_dim, samples_per_dim, samples_per_dim)) # Shape will be (Z, Y, X)
         
         total_pts = samples_per_dim ** 3
         print_every = total_pts // 20
         
-        for i, xi in enumerate(x):
-            for j, yj in enumerate(y):
-                for k, zk in enumerate(z):
-                    idx = i * samples_per_dim * samples_per_dim + j * samples_per_dim + k
+        for k, zk in enumerate(z): # Z first
+            for j, yj in enumerate(y): # Y second
+                for i, xi in enumerate(x): # X last
+                    idx = k * samples_per_dim * samples_per_dim + j * samples_per_dim + i
                     if idx % print_every == 0:
                         print(f"  Progress: {idx}/{total_pts} ({100*idx/total_pts:.1f}%)")
                     
                     dist = self._query_point_distance(mj_model, mj_data, 
                                                      np.array([xi, yj, zk]), 
                                                      is_robot_body)
-                    grid[i, j, k] = dist
+                    grid[k, j, i] = dist # Index as (Z, Y, X)
         
         self.sdf_grid.copy_(torch.from_numpy(grid).float().to(self.device).unsqueeze(0).unsqueeze(0))
         print(f"Grid computed! Min: {grid.min():.4f}, Max: {grid.max():.4f}")
@@ -98,15 +97,28 @@ class WorkspaceGridSDF(nn.Module):
             if geom_name and ("obs_" in geom_name or "table" in geom_name or "floor" in geom_name):
                 geom_pos = mj_model.geom_pos[geom_id]
                 geom_size = mj_model.geom_size[geom_id]
-                geom_type = mj_model.geom_type[geom_id]
+                geom_quat = mj_model.geom_quat[geom_id]
+                g_type = mj_model.geom_type[geom_id]
                 
-                if geom_type == mujoco.mjtGeom.mjGEOM_SPHERE:
-                    dist = np.linalg.norm(point - geom_pos) - geom_size[0]
-                elif geom_type == mujoco.mjtGeom.mjGEOM_BOX:
-                    local_pt = point - geom_pos
+                # Transform point to local frame
+                # local_pt = R.T * (point - geom_pos)
+                rel_pt = point - geom_pos
+                neg_quat = np.zeros(4)
+                mujoco.mju_negQuat(neg_quat, geom_quat)
+                local_pt = np.zeros(3)
+                mujoco.mju_rotVecQuat(local_pt, rel_pt, neg_quat)
+
+                if g_type == mujoco.mjtGeom.mjGEOM_SPHERE:
+                    dist = np.linalg.norm(local_pt) - geom_size[0]
+                elif g_type == mujoco.mjtGeom.mjGEOM_BOX:
                     q = np.abs(local_pt) - geom_size
                     dist = np.linalg.norm(np.maximum(q, 0)) + min(np.max(q), 0)
-                elif geom_type == mujoco.mjtGeom.mjGEOM_PLANE:
+                elif g_type == mujoco.mjtGeom.mjGEOM_CYLINDER:
+                    # Cylinder axis is always Z in local frame
+                    dist_h = np.abs(local_pt[2]) - geom_size[1]
+                    dist_r = np.linalg.norm(local_pt[:2]) - geom_size[0]
+                    dist = np.maximum(dist_h, dist_r)
+                elif g_type == mujoco.mjtGeom.mjGEOM_PLANE:
                     dist = point[2] - geom_pos[2]
                 else:
                     dist = 0.5
@@ -192,8 +204,7 @@ class WorkspaceGridSDF(nn.Module):
         
         sampled = sampled.reshape(N, num_cp)  # (N, 9)
         
-        temperature = 0.05
-        weights = torch.nn.functional.softmax(-sampled / temperature, dim=1)
-        min_dists = -temperature * torch.logsumexp(-sampled / temperature, dim=1)
+        # Switch to hard min for accurate comparison with GT
+        min_dists, _ = torch.min(sampled, dim=1)
         
         return min_dists.unsqueeze(1)  # (N, 1)

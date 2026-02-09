@@ -20,7 +20,7 @@ if __name__ == "__main__":
         prog="Training of a 1-Lipschitz architecture",
         description="This scripts runs the training optimization of a 1-Lipschitz neural network on some precomputed point cloud dataset."
     )
-    parser.add_argument("--world", type=str, default="obs20", help="sence name")
+    parser.add_argument("--world", type=str, default="obs30", help="sence name")
     parser.add_argument("--unsigned", action="store_true", help="flag for training an unsigned distance field instead of a signed one")
     
     # model parameters

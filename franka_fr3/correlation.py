@@ -258,7 +258,7 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, devic
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--world", type=str, default="obs20", help = "world name")
+    parser.add_argument("--world", type=str, default="obs30", help = "world name")
     parser.add_argument("--samples", type=int, default=3000, help = "number of samples")
     parser.add_argument("--out", type=str, default="output/correlation", help = "output directory")
     parser.add_argument("--fixed-thresh", type=float, default=None, help="Use a fixed threshold for classification")
@@ -275,3 +275,9 @@ if __name__ == "__main__":
     model = "output/" + args.world + "/model_final.pt"
 
     evaluate_franka_correlation(model, sence, args.samples, args.out, device, exhaustive=args.exhaustive)
+
+    save_dir = "output/benchmark"
+
+    summary_path = os.path.join(save_dir, f"summary_{args.world}.json")
+
+    

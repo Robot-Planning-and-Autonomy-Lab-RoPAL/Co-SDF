@@ -23,9 +23,7 @@ if __name__ == "__main__":
         description="This scripts runs the training optimization of a 1-Lipschitz neural network on some precomputed point cloud dataset."
     )
     
-    parser.add_argument("--dataset", type=str, default="block_world20", help="prefix of dataset files, e.g. 'block_world'")
-    parser.add_argument("--data", type=str, default="inputs/block_world20", help="directory where the dataset npy/npz files are stored")    
-    parser.add_argument("--output-name", type=str, default="block_world20", help="custom output folder name")
+    parser.add_argument("--world", type=str, default="obs10", help="name of the world")
     parser.add_argument("--unsigned", action="store_true", help="flag for training an unsigned distance field instead of a signed one")
     parser.add_argument("--n-hidden", type=int, default=256, help="size of the layers")
     parser.add_argument("--n-layers", type=int, default=10, help="number of layers in the network")
@@ -42,18 +40,16 @@ if __name__ == "__main__":
     parser.add_argument("--eikonal-normalize-scale", type=str, default="auto", help="Scale factor to normalize gradient norm (default 'auto' extracts from model)")
 
     parser.add_argument("--checkpoint-freq", type=int, default=10, help="Number of epochs between each model save")
-    parser.add_argument("--cpu", action="store_true", help="force training on CPU")
     
     args = parser.parse_args()
     
-    if args.cpu:
-        config_device = "cpu"
-    else:
-        config_device = get_device()
-    
+    data = f"inputs/{args.world}"
+    device = get_device()
+    print("Using device:", device)
+
     config = SimpleNamespace(
         signed = not args.unsigned,
-        device = config_device,
+        device = device,
         n_epochs = args.epochs,
         checkpoint_freq = args.checkpoint_freq,
         batch_size = args.batch_size,
@@ -64,19 +60,18 @@ if __name__ == "__main__":
         eikonal_normalize_scale = args.eikonal_normalize_scale,
         optimizer = "adam",
         learning_rate = args.learning_rate,
-        output_folder = os.path.join("output", args.output_name if len(args.output_name)>0 else args.dataset)
+        output_folder = os.path.join("output", args.world)
     )
     os.makedirs(config.output_folder, exist_ok=True)
-    print("DEVICE:", config.device)
     
     DIM : int = None
     
     if config.signed:
-        X_train_in = np.load(os.path.join(f"{args.data}", f"{args.dataset}_Xtrain_in.npy"))
+        X_train_in = np.load(os.path.join(f"{data}", f"{args.world}_Xtrain_in.npy"))
         X_train_in = torch.Tensor(X_train_in).to(config.device)
         loader_in = DataLoader(TensorDataset(X_train_in), batch_size=config.batch_size, shuffle=True)
         
-        X_train_out = np.load(os.path.join(f"{args.data}", f"{args.dataset}_Xtrain_out.npy"))
+        X_train_out = np.load(os.path.join(f"{data}", f"{args.world}_Xtrain_out.npy"))
         X_train_out = torch.Tensor(X_train_out).to(config.device)
         loader_out = DataLoader(TensorDataset(X_train_out), batch_size=config.batch_size, shuffle=True)
         
@@ -85,10 +80,10 @@ if __name__ == "__main__":
                     f"Outside: {X_train_out.shape}")
         
     else:
-        X_train_on = np.load(os.path.join("inputs", f"{args.dataset}_Xtrain_on.npy"))
+        X_train_on = np.load(os.path.join(f"{data}", f"{args.world}_Xtrain_on.npy"))
         X_train_on = torch.Tensor(X_train_on).to(config.device)
         loader_on = DataLoader(TensorDataset(X_train_on), batch_size=config.batch_size, shuffle=True)
-        X_train_out = np.load(os.path.join("inputs", f"{args.dataset}_Xtrain_out.npy"))
+        X_train_out = np.load(os.path.join(f"{data}", f"{args.world}_Xtrain_out.npy"))
         X_train_out = torch.Tensor(X_train_out).to(config.device)
         loader_out = DataLoader(TensorDataset(X_train_out), batch_size=config.batch_size, shuffle=True)
         
@@ -99,11 +94,11 @@ if __name__ == "__main__":
     
     X_test, Y_test = None, None
     test_loader = None
-    X_test_path = os.path.join(f"{args.data}", f"{args.dataset}_Xtest.npy")
-    Y_test_path = os.path.join(f"{args.data}",f"{args.dataset}_Ytest.npy")
+    X_test_path = os.path.join(f"{data}", f"{args.world}_Xtest.npy")
+    Y_test_path = os.path.join(f"{data}",f"{args.world}_Ytest.npy")
     if os.path.exists(X_test_path) and os.path.exists(Y_test_path):
-        X_test = np.load(os.path.join(f"{args.data}", f"{args.dataset}_Xtest.npy"))
-        Y_test = np.load(os.path.join(f"{args.data}", f"{args.dataset}_Ytest.npy")).reshape((X_test.shape[0], 1))
+        X_test = np.load(os.path.join(f"{data}", f"{args.world}_Xtest.npy"))
+        Y_test = np.load(os.path.join(f"{data}", f"{args.world}_Ytest.npy")).reshape((X_test.shape[0], 1))
         X_test = torch.Tensor(X_test).to(config.device)
         Y_test = torch.Tensor(Y_test).to(config.device)
         test_loader = DataLoader(TensorDataset(X_test, Y_test), batch_size=config.test_batch_size)

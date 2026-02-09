@@ -203,14 +203,14 @@ class DataGenerator:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate training data for C-Space NDF")
-    parser.add_argument('--world', default='bookshelf', help='Scene name')
+    parser.add_argument('--world', default='obs30', help='Scene name')
     parser.add_argument("--n_points", type=int, default=500000, help='Number of points to generate')
     parser.add_argument("--near_ratio", type=float, default=0.6, help='Ratio of near points to total points')
     parser.add_argument("--sigma", type=float, default=0.05, help='Standard deviation of Gaussian noise')
     args = parser.parse_args()
     
     device = get_device()
-    print_msg(f"Using {device}")
+    print(f"Using {device}")
 
     abs_model_path = os.path.abspath("scenes/" + args.world + ".xml")
     mj_model = mujoco.MjModel.from_xml_path(abs_model_path)

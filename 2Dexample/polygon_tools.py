@@ -141,16 +141,6 @@ class Polygon(PointList):
             else:
                 raise TypeError("distance() expects a Polygon or object with to_polygon()")
 
-        # 1. Point-to-Segment distance helper
-        def p_to_seg_dist_sq(p, a, b):
-            ab = (b.x - a.x, b.y - a.y)
-            ap = (p.x - a.x, p.y - a.y)
-            l2 = ab[0]**2 + ab[1]**2
-            if l2 == 0: return ap[0]**2 + ap[1]**2
-            t = max(0, min(1, (ap[0]*ab[0] + ap[1]*ab[1]) / l2))
-            proj = (a.x + t*ab[0], a.y + t*ab[1])
-            return (p.x - proj[0])**2 + (p.y - proj[1])**2
-
         min_dist_sq = float('inf')
 
         # 2. Check all points of self against all edges of other
@@ -239,6 +229,15 @@ class Polygon(PointList):
         #
         # return False
 
+
+def p_to_seg_dist_sq(p, a, b):
+    ab = (b.x - a.x, b.y - a.y)
+    ap = (p.x - a.x, p.y - a.y)
+    l2 = ab[0]**2 + ab[1]**2
+    if l2 == 0: return ap[0]**2 + ap[1]**2
+    t = max(0, min(1, (ap[0]*ab[0] + ap[1]*ab[1]) / l2))
+    proj = (a.x + t*ab[0], a.y + t*ab[1])
+    return (p.x - proj[0])**2 + (p.y - proj[1])**2
 
 class Rectangle(Polygon):
     def __init__(self, xlim, ylim):
@@ -357,9 +356,30 @@ class Circle:
         dy = p.y - self.center.y
         return (dx * dx + dy * dy) <= (self.radius * self.radius)
     
-    def intersect(self, poly2):
-        # Delegate to Polygon's intersect which handles circle conversion robustly
-        return poly2.intersect(self)
+    def intersect(self, other):
+        # Explicitly handle Circle-Circle and Circle-Polygon
+        if isinstance(other, Circle):
+            # Distance between centers
+            d2 = (self.center.x - other.center.x)**2 + (self.center.y - other.center.y)**2
+            return d2 <= (self.radius + other.radius)**2
+        
+        # If it's a Polygon or other, use their point_inside or delegate carefully
+        if hasattr(other, "point_inside"):
+            # Check if any vertex of polygon is inside circle
+            # (Note: this is not sufficient for full intersection, but often used in this codebase)
+            # A better way is to delegate back but ensure no recursion:
+            if isinstance(other, Polygon):
+                # Check if center is inside polygon or any edge is near center
+                if other.point_inside(self.center):
+                    return True
+                # Check distance from center to all edges
+                for v0, v1 in other.edges():
+                    if p_to_seg_dist_sq(self.center, v0, v1) <= self.radius**2:
+                        return True
+                return False
+        
+        # Fallback to polygon approximation for complex cases
+        return other.intersect(self.to_polygon())
     
     def to_polygon(self, n=64):
         """

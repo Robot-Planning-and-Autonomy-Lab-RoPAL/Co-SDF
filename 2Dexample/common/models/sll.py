@@ -5,9 +5,7 @@ import torch.nn.functional as F
 from deel import torchlip
 
 def safe_inv(x):
-    mask = x == 0
-    x_inv = x ** (-1)
-    x_inv[mask] = 0
+    x_inv = torch.where(x != 0, x ** (-1), torch.zeros_like(x))
     return x_inv
 
 class SDPBasedLipschitzDense(nn.Module):

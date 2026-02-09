@@ -33,30 +33,30 @@ def load_model(path, device, n_layers, n_hidden):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-path', default='output/block_world5/model_final.pt', help="Path to the NDF model")
-    parser.add_argument('--world-file', default='config/block_world5.yaml', help="World YAML file")
-    parser.add_argument('--n-samples', type=int, default=2000, help="Number of random samples for correlation")
+    parser.add_argument('--world', default='obs10', help="world name")
+    parser.add_argument('--n-samples', type=int, default=20000, help="Number of random samples for correlation")
     parser.add_argument('--seed', type=int, default=42, help="Random seed")
     parser.add_argument('--grid-res', type=int, default=128, help="Resolution for GT SDF calculation")
     parser.add_argument('--bound-limit', type=float, default=0.5, help="Distance range (rad) for correlation analysis")
     parser.add_argument('--output-dir', default='output/correlation', help="Output directory for results")
-    parser.add_argument('--n-layers', type=int, default=5, help="NDF layers")
+    parser.add_argument('--n-layers', type=int, default=10, help="NDF layers")
     parser.add_argument('--n-hidden', type=int, default=256, help="NDF hidden units")
     args = parser.parse_args()
 
     seed(args.seed)
 
     device = get_device()
-    print(f"\nEvaluating 2D NDF Correlation on {device}...")
+    print(f"Using {device}")
     
-    print(f"Loading world: {args.world_file}")
-    problem = robot_tools.PlanningProblem(args.world_file)
+    sense = "config/" + args.world + ".yaml"
+    model = "output/" + args.world + "/model_final.pt"
     
-    print("Constructing C-Space SDF...")
+    problem = robot_tools.PlanningProblem(sense)
+    
     theta, c_space = problem.construct_config_space(nx=args.grid_res)
     theta_periodic, sdf_grid = cspace_sdf.cobs_sdf_on_torus(theta, c_space)
     
-    model = load_model(args.model_path, device, n_layers=args.n_layers, n_hidden=args.n_hidden)
+    model = load_model(model, device, n_layers=args.n_layers, n_hidden=args.n_hidden)
     
     print(f"Sampling {args.n_samples} points...")
     qs = np.random.uniform(0, 2*np.pi, (args.n_samples, 2))
@@ -122,7 +122,7 @@ if __name__ == "__main__":
     plt.legend()
     plt.tight_layout()
     
-    plot_path = os.path.join(args.output_dir, f"correlation_{os.path.basename(args.world_file).replace('.yaml','')}.png")
+    plot_path = os.path.join(args.output_dir, f"correlation_{args.world}.png")
     plt.savefig(plot_path, dpi=300)
     print(f"Saved correlation plot to {plot_path}")
     
