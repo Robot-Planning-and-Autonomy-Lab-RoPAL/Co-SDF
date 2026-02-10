@@ -1,20 +1,21 @@
+import os
+import torch
+import shutil
+import argparse
+import robot_tools
 import numpy as np
 import matplotlib.pyplot as plt
 import polygon_tools as poly
-import robot_tools
-from matplotlib.patches import Polygon as PlotPolygon, Circle as PlotCircle
-from matplotlib.collections import PatchCollection
 import matplotlib.animation as animation
 import matplotlib.cm as cm
 import matplotlib.colors
-from matplotlib.colors import TwoSlopeNorm
-import argparse
-import shutil
-from matplotlib.ticker import MultipleLocator
-from cspace_sdf import cobs_sdf_on_torus
 import matplotlib.patheffects as path_effects
-import torch
-import os
+from matplotlib.colors import TwoSlopeNorm
+from common.models import load_model
+from cspace_sdf import cobs_sdf_on_torus
+from matplotlib.ticker import MultipleLocator
+from matplotlib.patches import Polygon as PlotPolygon, Circle as PlotCircle
+from matplotlib.collections import PatchCollection
 """ 
 
 Plot the config space from Introduction to Autonomous Mobile Robots Fig 6.1 
@@ -86,6 +87,7 @@ def plot_config_space(ax,
                       heat_cmap=None, 
                       heat_norm=None):
     
+    # Plot obstacles in workspace
     h_obs = []
     for o in obstacles:
       xy = shape_to_xy(o, n=256)
@@ -96,40 +98,51 @@ def plot_config_space(ax,
     c_obs.set_path_effects([path_effects.withSimplePatchShadow(offset=(1, -1), shadow_rgbFace='gray', alpha=0.3)])
     ax[0].add_collection(c_obs)
 
-    arm_poly = arm.get_current_polygon()
+    # Plot Robot using exact geometry (Collision Shapes)
+    shapes = arm.get_collision_shapes()
     spine_points = arm.get_spine_points()
-    h_arm = PlotPolygon(shape_to_xy(arm_poly), facecolor='#34495E', edgecolor='#2C3E50', 
-                        linewidth=0.5, zorder=4,
-                        path_effects=[path_effects.withSimplePatchShadow(offset=(0.6, -0.6), shadow_rgbFace='gray', alpha=0.3)])
-    ax[0].add_patch(h_arm)
     
-    r = arm._link_width / 2.0
+    # Visual artists for animation/updates
+    h_arm_parts = []
     h_joints = []
-    for i in range(len(spine_points[0]) - 1):
-        c = PlotCircle((spine_points[0][i], spine_points[1][i]), r, 
-                       facecolor='#E74C3C', edgecolor='white', linewidth=1.5, zorder=5)
-        ax[0].add_patch(c)
-        h_joints.append(c)
+    h_ee = None
     
-    h_ee = PlotCircle((spine_points[0][-1], spine_points[1][-1]), r,
-                      facecolor='#F39C12', edgecolor='white', linewidth=1.5, zorder=5)
-    ax[0].add_patch(h_ee)
+    for shape in shapes:
+        if isinstance(shape, poly.Circle):
+            # Check if it's the End-Effector (last spine point)
+            is_ee = (abs(shape.center.x - spine_points[0][-1]) < 1e-5 and 
+                     abs(shape.center.y - spine_points[1][-1]) < 1e-5)
+            c = 'black' if is_ee else '#E74C3C' # Black EE, Red Joints
+            patch = PlotCircle((shape.center.x, shape.center.y), shape.radius, 
+                              facecolor=c, edgecolor='white', linewidth=0.5, zorder=5)
+            ax[0].add_patch(patch)
+            if is_ee: h_ee = patch
+            else: h_joints.append(patch)
+        else:
+            # Link body
+            patch = PlotPolygon(shape_to_xy(shape), facecolor='#F39C12', edgecolor='none', 
+                               alpha=0.9, zorder=4)
+            ax[0].add_patch(patch)
+            h_arm_parts.append(patch)
+    
+    # Add shadow to the first link part for depth
+    if h_arm_parts:
+        h_arm_parts[0].set_path_effects([path_effects.withSimplePatchShadow(offset=(0.5, -0.5), alpha=0.2)])
 
     for a in ax:
         a.set_aspect('equal')
 
-    ax[0].set_xlabel(r'$x$')
-    ax[0].set_ylabel(r'$y$')
+    # Remove titles and labels for paper
+    # ax[0].set_xlabel(r'$x$')
+    # ax[0].set_ylabel(r'$y$')
+    # ax[1].set_xlabel(r'$\theta_1$')
+    # ax[1].set_ylabel(r'$\theta_2$')
+
     ax[0].set_xlim(xlim)
     ax[0].set_ylim(ylim)
     ax[0].set_xticks([2, 4, 6, 8, 10])
     ax[0].set_yticks([2, 4, 6, 8, 10])
-    for label in ax[0].get_xticklabels() + ax[0].get_yticklabels():
-        label.set_color('#2C3E50')
-        label.set_alpha(0.8)
-
-    ax[1].set_xlabel(r'$\theta_1$')
-    ax[1].set_ylabel(r'$\theta_2$')
+    
     ax[1].set_xlim(theta1_lim[0], theta1_lim[-1])
     ax[1].set_ylim(theta2_lim[0], theta2_lim[-1])
 
@@ -139,18 +152,8 @@ def plot_config_space(ax,
     ax[0].yaxis.set_minor_locator(MultipleLocator(1.0))
     ax[1].set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
     ax[1].set_yticks([0, np.pi/2, np.pi, 3*np.pi/2, 2*np.pi])
-    ax[1].xaxis.set_minor_locator(MultipleLocator(np.pi/4))
-    ax[1].yaxis.set_minor_locator(MultipleLocator(np.pi/4))
-
     ax[1].set_xticklabels([r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$'])
     ax[1].set_yticklabels([r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$'])
-    
-    for label in ax[1].get_xticklabels():
-        label.set_color('#2C3E50')
-        label.set_alpha(0.8)
-    for label in ax[1].get_yticklabels():
-        label.set_color('#2C3E50')
-        label.set_alpha(0.8)
     
     for a in ax:
         a.grid(which='major', axis='both', linestyle='--', alpha=0.3)
@@ -160,14 +163,7 @@ def plot_config_space(ax,
             spine.set_linewidth(1.0)
             spine.set_color('#34495E')
             spine.set_alpha(0.8)
-        a.xaxis.label.set_color('#2C3E50')
-        a.xaxis.label.set_alpha(0.9)
-        a.yaxis.label.set_color('#2C3E50')
-        a.yaxis.label.set_alpha(0.9)
-        for label in a.get_xticklabels():
-            label.set_color('#2C3E50')
-            label.set_alpha(0.8)
-        for label in a.get_yticklabels():
+        for label in a.get_xticklabels() + a.get_yticklabels():
             label.set_color('#2C3E50')
             label.set_alpha(0.8)
         a.tick_params(colors='gray', length=0, width=0)
@@ -184,7 +180,8 @@ def plot_config_space(ax,
 
         ax[1]._heatmap_handle = hm
 
-    return h_arm, h_joints, h_ee
+    # Return h_arm as the list of link polygons for simple compatibility with animator if needed
+    return h_arm_parts[0] if h_arm_parts else None, h_joints, h_ee
 
 class ArmAnimator(object):
     h_arm = None
@@ -271,7 +268,7 @@ class ArmAnimator(object):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Plot the config space from Fig 6.1 in Intro to AMR textbook')
     parser.add_argument('--nx', type=int, default=201, help='Resolution (n points in each dimension)')
-    parser.add_argument('--world', default='block_world10', help='World name')
+    parser.add_argument('--world', default='block_world1', help='World name')
     parser.add_argument('--save-animation', default=None, help='Save animation to file')
     parser.add_argument('--no-animation', default=False, action='store_true', help='Don\'t animate')
     parser.add_argument('--arm-shadows', type=int, default=0, help='Plot shadows of arm position every n steps (0 for off)')
@@ -328,67 +325,67 @@ if __name__ == "__main__":
     plt.setp(a1[1].get_xticklabels(), visible=False)
     a1[1].set_xlabel('')
     
-    try:
-        from common.models import load_model
-        model_path = 'output/block_world1/model_final.pt'
-        device = 'cpu'
-        
-        model = load_model(model_path, device)
-        model.eval()
-        
-        size = [300, 300]
-        t1_lim, t2_lim = arm_problem.robot.joint_limits[0], arm_problem.robot.joint_limits[1]
+    model_path = f'output/{args.world}/model_final.pt'
+    if os.path.exists(model_path):
+        try:
+            device = 'cpu'
             
-        yy, xx = torch.meshgrid(torch.linspace(t1_lim[0], t1_lim[1], size[0]), 
-                                torch.linspace(t2_lim[0], t2_lim[1], size[1]), indexing='ij')
-        grid_points = torch.stack([xx, yy], axis=2).reshape((-1, 2)).float().to(device)
+            model = load_model(model_path, device)
+            model.eval()
             
-        with torch.no_grad():
-            sdf_output = model(grid_points)
-            if sdf_output.dim() > 1:
-                sdf_values = sdf_output[:, 0].reshape(size)
-            else:
-                sdf_values = sdf_output.reshape(size)
-            
-            vmin_val = sdf_values.min().item()
-            vmax_val = sdf_values.max().item()
-            vmin_val = min(vmin_val, -1e-3)
-            vmax_val = max(vmax_val, 1e-3)
-            norm = TwoSlopeNorm(vmin=vmin_val, vcenter=0.0, vmax=vmax_val)
-            
-            extent = [t1_lim[0], t1_lim[1], t2_lim[0], t2_lim[1]]
-            a1[2].imshow(sdf_values.cpu().numpy(), origin='lower', cmap='seismic', 
-                        extent=extent, norm=norm, interpolation='nearest', alpha=0.95)
-            
-            a1[2].set_xlabel(r'$\theta_1$')
-            a1[2].set_ylabel(r'$\theta_2$')
-            a1[2].set_xlim(extent[0], extent[1])
-            a1[2].set_ylim(extent[2], extent[3])
-            a1[2].set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
-            a1[2].set_yticks([0, np.pi/2, np.pi, 3*np.pi/2, 2*np.pi])
-            a1[2].set_xticklabels([r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$'])
-            a1[2].set_yticklabels([r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$'])
-            
-            for label in a1[2].get_xticklabels() + a1[2].get_yticklabels():
-                label.set_color('#2C3E50')
-                label.set_alpha(0.8)
-            a1[2].set_aspect('equal')
-            a1[2].grid(which='major', axis='both', linestyle='--', alpha=0.3)
-            a1[2].set_axisbelow(True)
-            a1[2].minorticks_off()
-            for spine in a1[2].spines.values():
-                spine.set_linewidth(1.0)
-                spine.set_color('#34495E')
-                spine.set_alpha(0.8)
-            a1[2].xaxis.label.set_color('#2C3E50')
-            a1[2].xaxis.label.set_alpha(0.9)
-            a1[2].yaxis.label.set_color('#2C3E50')
-            a1[2].yaxis.label.set_alpha(0.9)
-            a1[2].tick_params(colors='gray', length=0, width=0)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"Could not load NDF model: {e}")
+            size = [300, 300]
+            t1_lim, t2_lim = arm_problem.robot.joint_limits[0], arm_problem.robot.joint_limits[1]
+                
+            yy, xx = torch.meshgrid(torch.linspace(t1_lim[0], t1_lim[1], size[0]), 
+                                    torch.linspace(t2_lim[0], t2_lim[1], size[1]), indexing='ij')
+            grid_points = torch.stack([xx, yy], axis=2).reshape((-1, 2)).float().to(device)
+                
+            with torch.no_grad():
+                sdf_output = model(grid_points)
+                if sdf_output.dim() > 1:
+                    sdf_values = sdf_output[:, 0].reshape(size)
+                else:
+                    sdf_values = sdf_output.reshape(size)
+                
+                vmin_val = sdf_values.min().item()
+                vmax_val = sdf_values.max().item()
+                vmin_val = min(vmin_val, -1e-3)
+                vmax_val = max(vmax_val, 1e-3)
+                norm = TwoSlopeNorm(vmin=vmin_val, vcenter=0.0, vmax=vmax_val)
+                
+                extent = [t1_lim[0], t1_lim[1], t2_lim[0], t2_lim[1]]
+                a1[2].imshow(sdf_values.cpu().numpy(), origin='lower', cmap='seismic', 
+                            extent=extent, norm=norm, interpolation='nearest', alpha=0.95)
+                
+                # a1[2].set_xlabel(r'$\theta_1$')
+                # a1[2].set_ylabel(r'$\theta_2$')
+                a1[2].set_xlim(extent[0], extent[1])
+                a1[2].set_ylim(extent[2], extent[3])
+                a1[2].set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
+                a1[2].set_yticks([0, np.pi/2, np.pi, 3*np.pi/2, 2*np.pi])
+                a1[2].set_xticklabels([r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$'])
+                a1[2].set_yticklabels([r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$'])
+                
+                for label in a1[2].get_xticklabels() + a1[2].get_yticklabels():
+                    label.set_color('#2C3E50')
+                    label.set_alpha(0.8)
+                a1[2].set_aspect('equal')
+                a1[2].grid(which='major', axis='both', linestyle='--', alpha=0.3)
+                a1[2].set_axisbelow(True)
+                a1[2].minorticks_off()
+                for spine in a1[2].spines.values():
+                    spine.set_linewidth(1.0)
+                    spine.set_color('#34495E')
+                    spine.set_alpha(0.8)
+                # a1[2].xaxis.label.set_color('#2C3E50')
+                # a1[2].xaxis.label.set_alpha(0.9)
+                # a1[2].yaxis.label.set_color('#2C3E50')
+                # a1[2].yaxis.label.set_alpha(0.9)
+                a1[2].tick_params(colors='gray', length=0, width=0)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"Could not load NDF model: {e}")
     
     if not args.no_animation:
         animation_length = 10.0

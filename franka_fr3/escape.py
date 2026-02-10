@@ -7,7 +7,15 @@ from tqdm import tqdm
 from common.models import load_model
 from common.utils import get_device
 
-class Escape:
+def set_seed(seed):
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+class GradientEscaper:
     def __init__(self, model_path, scene_xml, device):
         self.device = device
         self.model = load_model(model_path, device)
@@ -99,16 +107,16 @@ class Escape:
             q = self.q_lo + np.random.rand(7) * (self.q_hi - self.q_lo)
             if self.get_collision_status(q): return q
 
-    def optim_escape(self, start_cfg, lr=0.05, safety_margin=0.02, max_steps=100):
+    def run(self, start_cfg, lr=0.05, safety_margin=0.02, max_steps=100):
         t_start = time.time()
         q_lo_t = torch.from_numpy(self.q_lo).float().to(self.device)
         q_hi_t = torch.from_numpy(self.q_hi).float().to(self.device)
         q = torch.tensor(start_cfg, dtype=torch.float32, device=self.device, requires_grad=True)
         optimizer = torch.optim.Adam([q], lr=lr)
         
-        cfg_history = [start_cfg.copy()]
+        trajectory = [start_cfg.copy()]
         ndf_history = []
-        success = False
+        ndf_success_step = None
         joint_weights = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.2, 1.5, 1.5], device=self.device)
         
         for step in range(max_steps):
@@ -117,8 +125,7 @@ class Escape:
             ndf_history.append(ndf_val.item())
             
             if ndf_val.item() >= safety_margin:
-                success = True
-                cfg_history.append(q.detach().cpu().numpy().copy())
+                ndf_success_step = step
                 break
             
             loss = torch.nn.functional.relu(safety_margin - ndf_val)
@@ -136,76 +143,118 @@ class Escape:
                         q.add_(torch.randn_like(q) * 0.01)
                 q.clamp_(q_lo_t, q_hi_t)
             
-            cfg_history.append(q.detach().cpu().numpy().copy())
+            trajectory.append(q.detach().cpu().numpy().copy())
             
         t_escape = time.time() - t_start
-        return np.array(cfg_history), success, step + 1, t_escape
-
-def set_seed(seed):
-    import random
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--world", type = str, default="obs10", help="scene name")
-    parser.add_argument("--samples", type=int, default=200, help="number of samples")
-    parser.add_argument("--lr", type=float, default=0.1, help="learning rate")
-    parser.add_argument("--max_steps", type=int, default=100, help="maximum number of steps")
-    parser.add_argument("--safety_margin", type=float, default=0.02, help="safety margin")
-    parser.add_argument("--seed", type=int, default=42, help="random seed")
-    args = parser.parse_args()
-
-    scene = f"scenes/{args.world}.xml"
-    model = f"output/{args.world}/model_final.pt"
-
-    device = get_device()
-    print(f"Using device: {device}")
-
-    set_seed(args.seed)
-    esc_tool = Escape(model, scene, device)
-    print(f"Sampling {args.samples} collision points...")
-    seeds = [esc_tool.find_collision_q() for _ in tqdm(range(args.samples))]
-    
-    ndf_success_count = 0
-    gt_actually_safe_count = 0
-    strict_success_count = 0
-    total_steps = 0
-    total_time = 0
-    
-    print(f"\nRunning Adam Escape with learning rate: {args.lr}, safety margin: {args.safety_margin}, max steps: {args.max_steps}")
-    for i in tqdm(range(args.samples), desc="Escaping"):
-        q0 = seeds[i]
-        history, ndf_success, steps, dt = esc_tool.optim_escape(q0, lr=args.lr, safety_margin=args.safety_margin, max_steps=args.max_steps)
-        final_q = history[-1]
+        final_q_np = q.detach().cpu().numpy()
+        is_safe_gt = not self.get_collision_status(final_q_np)
         
-        gt_is_coll = esc_tool.get_collision_status(final_q)
+        return {
+            "ndf_success": ndf_success_step is not None,
+            "gt_success": is_safe_gt,
+            "gt_steps": ndf_success_step if ndf_success_step is not None else step,
+            "ndf_steps": ndf_success_step if ndf_success_step is not None else step,
+            "final_q": final_q_np,
+            "trajectory": np.array(trajectory),
+            "ndf_history": ndf_history,
+            "time": t_escape
+        }
+
+class SamplingEscaper:
+    def __init__(self, model_path, scene_xml, device):
+        self.device = device
+        self.model = load_model(model_path, device)
+        self.model.eval()
         
-        if ndf_success: 
-            ndf_success_count += 1
+        self.mj_model = mujoco.MjModel.from_xml_path(os.path.abspath(scene_xml))
+        self.mj_data = mujoco.MjData(self.mj_model)
+        
+        self.lower = self.mj_model.jnt_range[:7, 0]
+        self.upper = self.mj_model.jnt_range[:7, 1]
+        
+        self.robot_body_ids = set()
+        base_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "base")
+        if base_id >= 0:
+            for i in range(self.mj_model.nbody):
+                curr = i
+                while curr > 0:
+                    if curr == base_id:
+                        self.robot_body_ids.add(i)
+                        break
+                    curr = self.mj_model.body_parentid[curr]
+                    
+        self.is_robot_body = np.zeros(self.mj_model.nbody, dtype=bool)
+        if self.robot_body_ids:
+            self.is_robot_body[list(self.robot_body_ids)] = True
 
-        if not gt_is_coll: 
-            gt_actually_safe_count += 1
+    def check_collision(self, q):
+        self.mj_data.qpos[:7] = q
+        if self.mj_model.nq > 7:
+            self.mj_data.qpos[7:self.mj_model.nq] = 0.04
+        mujoco.mj_forward(self.mj_model, self.mj_data)
+        
+        for i in range(self.mj_data.ncon):
+            c = self.mj_data.contact[i]
+            b1, b2 = self.mj_model.geom_bodyid[c.geom1], self.mj_model.geom_bodyid[c.geom2]
+            if self.is_robot_body[b1] ^ self.is_robot_body[b2]:
+                return True
+        return False
 
-        if ndf_success and not gt_is_coll:
-            strict_success_count += 1
-            status = "SUCCESS"
-        else: 
-            status = "FAILED "
+    def sample_boundary_collision(self):
+        while True:
+            q1 = self.lower + np.random.rand(7) * (self.upper - self.lower)
+            c1 = self.check_collision(q1)
+            
+            q2 = np.clip(q1 + np.random.randn(7) * 0.15, self.lower, self.upper)
+            c2 = self.check_collision(q2)
+            
+            if c1 != c2:
+                q_coll, q_free = (q1, q2) if c1 else (q2, q1)
+                for _ in range(5): 
+                    mid = (q_coll + q_free) / 2
+                    if self.check_collision(mid): 
+                        q_coll = mid
+                    else: 
+                        q_free = mid
+                return q_coll
 
-        total_steps += steps
-        total_time += dt
-
-    print(f"\n" + "="*60 + "\nESCAPE PERFORMANCE\n" + "="*60)
-    print(f"Total Samples: {args.samples}")
-    print(f"NDF Perceived SR: {ndf_success_count/args.samples*100:.1f}%")
-    print(f"GT Physical SR:   {gt_actually_safe_count/args.samples*100:.1f}%")
-    print(f"Strict Success:   {strict_success_count/args.samples*100:.1f}%")
-    print(f"Avg Steps:        {total_steps / args.samples:.1f}")
-    print(f"Avg Time:         {total_time / args.samples * 1000:.2f} ms")
-    print(f"Avg Step Time:    {total_time / total_steps * 1000:.2f} ms")
-    print("="*60 + "\n")
+    def run(self, q0, step_size=0.05, max_steps=100, K=50, safety_margin=0.02):
+        t_start = time.time()
+        q_curr = torch.tensor(q0, dtype=torch.float32, device=self.device)
+        
+        trajectory = [q0.copy()]
+        ndf_success_step = None
+        ndf_history = []
+        
+        for step in range(max_steps):
+            with torch.no_grad():
+                ndf_curr = self.model(q_curr.reshape(1, -1)).item()
+                ndf_history.append(ndf_curr)
+                
+                if ndf_curr >= safety_margin:
+                    ndf_success_step = step
+                    break
+                
+                noise = torch.randn(K, 7, device=self.device) * step_size
+                candidates = torch.clamp(q_curr + noise, 
+                                        torch.from_numpy(self.lower).float().to(self.device),
+                                        torch.from_numpy(self.upper).float().to(self.device))
+                ndf_candidates = self.model(candidates).squeeze()
+                best_idx = torch.argmax(ndf_candidates)
+                q_curr = candidates[best_idx]
+                trajectory.append(q_curr.cpu().numpy().copy())
+        
+        t_escape = time.time() - t_start
+        final_q_np = q_curr.cpu().numpy()
+        is_safe_gt = not self.check_collision(final_q_np)
+        
+        return {
+            "ndf_success": ndf_success_step is not None,
+            "gt_success": is_safe_gt,
+            "gt_steps": ndf_success_step if ndf_success_step is not None else step,
+            "ndf_steps": ndf_success_step if ndf_success_step is not None else step,
+            "final_q": final_q_np,
+            "trajectory": np.array(trajectory),
+            "ndf_history": ndf_history,
+            "time": t_escape
+        }

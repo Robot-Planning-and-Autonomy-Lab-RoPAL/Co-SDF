@@ -34,9 +34,9 @@ def load_model(path, device, n_layers, n_hidden):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--world', default='obs10', help="world name")
-    parser.add_argument('--n-samples', type=int, default=20000, help="Number of random samples for correlation")
+    parser.add_argument('--n-samples', type=int, default=3000, help="Number of random samples for correlation")
     parser.add_argument('--seed', type=int, default=42, help="Random seed")
-    parser.add_argument('--grid-res', type=int, default=128, help="Resolution for GT SDF calculation")
+    parser.add_argument('--grid-res', type=int, default=256, help="Resolution for GT SDF calculation")
     parser.add_argument('--bound-limit', type=float, default=0.5, help="Distance range (rad) for correlation analysis")
     parser.add_argument('--output-dir', default='output/correlation', help="Output directory for results")
     parser.add_argument('--n-layers', type=int, default=10, help="NDF layers")
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     print(f"Using {device}")
     
     sense = "config/" + args.world + ".yaml"
-    model = "output/" + args.world + "/model_final.pt"
+    model = "output/" + args.world + "_siren/model_final.pt"
     
     problem = robot_tools.PlanningProblem(sense)
     

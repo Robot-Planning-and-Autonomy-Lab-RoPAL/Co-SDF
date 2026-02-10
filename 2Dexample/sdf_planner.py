@@ -41,11 +41,9 @@ class WorkspaceSDFPlanner:
         Q = opti.variable(n, 2)
         opti.set_initial(Q, initial_path)
         
-        # --- Debug: Check initial SDF ---
         if verbose:
             try:
                 init_sdf = np.array(self.workspace_sdf(torch.tensor(initial_path, device=self.device, dtype=torch.float32)).detach().cpu())
-                print(f"[SDF] Initial min dist: {init_sdf.min():.4f}, Margin: {safety_margin:.4f}")
             except:
                 pass
         
@@ -53,12 +51,8 @@ class WorkspaceSDFPlanner:
         diff2 = Q[2:, :] + Q[:-2, :] - 2*Q[1:-1, :]
         cost_smooth = (1.0*ca.sumsqr(diff1) + 20.0*ca.sumsqr(diff2))/n
         
-        # --- 2. Active Clearance / Collision Constraints ---
         sdf_dists = self.l4c_sdf(Q)
-        sdf_dists = ca.reshape(sdf_dists, n, 1)  # make shape explicit like NDF (n,1)
-
-        # --- 3. Active Clearance Objective (Repulsion Force) ---
-        # Synchronized with ndf_casadi.py
+        sdf_dists = ca.reshape(sdf_dists, n, 1)
         z = ca.fmin(50, -sdf_dists / safety_margin)
         cost_clearance = w_clr * ca.sum1(ca.exp(z))
             
@@ -70,10 +64,8 @@ class WorkspaceSDFPlanner:
         for j in range(2):
             opti.subject_to(opti.bounded(self.lower[j], Q[:, j], self.upper[j]))
         
-        # Hard constraint: dist >= margin
         opti.subject_to(sdf_dists >= safety_margin)
         
-        # Velocity and Acceleration limits
         opti.subject_to(opti.bounded(-v_max * dt, diff1, v_max * dt))
         opti.subject_to(opti.bounded(-a_max * dt**2, diff2, a_max * dt**2))
         

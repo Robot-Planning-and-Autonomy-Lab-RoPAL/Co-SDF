@@ -8,6 +8,7 @@ from .loss import *
 from .callback import Callback
 
 import mouette as M
+import numpy as np
 import time
 
 class Trainer(M.Logger):
@@ -144,7 +145,7 @@ class Trainer(M.Logger):
             t0 = time.time()
             train_loss = dict()
             train_loss["fit"] = 0.
-            if self.config.eikonal_weight >0. :
+            if hasattr(self.config, "eikonal_weight") and self.config.eikonal_weight >0. :
                 train_loss["eik"] = 0.
                 
             for (x,y_target) in tqdm(self.train_loaders, total=len(self.train_loaders)):
@@ -160,14 +161,20 @@ class Trainer(M.Logger):
                 total_batch_loss += batch_loss_fit
 
                 ### Eikonal loss
-                if self.config.eikonal_weight>0.:
-                    x_rdm = 2*torch.rand_like(x)-1 # between -1 and 1
+                if hasattr(self.config, "eikonal_weight") and self.config.eikonal_weight>0.:
+                    # Use actual configuration space range [0, 2pi]
+                    x_rdm = 2 * np.pi * torch.rand_like(x) 
                     x_rdm.requires_grad = True
                     y_rdm = model(x_rdm)
+                    
+                    # Gradient with respect to x (configuration)
                     batch_grad = torch.autograd.grad(y_rdm, x_rdm, grad_outputs=torch.ones_like(y_rdm), create_graph=True)[0]
-                    # batch_loss_eik = self.config.eikonal_weight * F.mse_loss(torch.sum(batch_grad*batch_grad, axis=-1), ones)
                     batch_grad_norm = batch_grad.norm(dim=-1)
-                    batch_loss_eik = self.config.eikonal_weight * F.mse_loss(batch_grad_norm, torch.ones_like(batch_grad_norm))
+                    
+                    # Support scale normalization (same as train_lip)
+                    eik_scale = getattr(self.config, "eikonal_normalize_scale", 1.0)
+                    batch_loss_eik = self.config.eikonal_weight * F.mse_loss(batch_grad_norm / eik_scale, torch.ones_like(batch_grad_norm))
+                    
                     total_batch_loss += batch_loss_eik
                     train_loss["eik"] += float(batch_loss_eik.detach())
 

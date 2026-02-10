@@ -23,7 +23,7 @@ if __name__ == "__main__":
         description="This scripts runs the training optimization of a 1-Lipschitz neural network on some precomputed point cloud dataset."
     )
     
-    parser.add_argument("--world", type=str, default="obs10", help="name of the world")
+    parser.add_argument("--world", type=str, default="obs30", help="name of the world")
     parser.add_argument("--unsigned", action="store_true", help="flag for training an unsigned distance field instead of a signed one")
     parser.add_argument("--n-hidden", type=int, default=256, help="size of the layers")
     parser.add_argument("--n-layers", type=int, default=10, help="number of layers in the network")

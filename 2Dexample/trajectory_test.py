@@ -11,18 +11,12 @@ from sdf_planner import WorkspaceSDFPlanner
 from trajectory_verify import TrajectoryEvaluator
 
 
-def global_optimization(seed, sence, model, solver, n_waypoints, safety_margin, max_iter, device):
-
-    if seed is not None:
-        np.random.seed(seed)
-        import random
-        random.seed(seed)
+def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_iter, device):
 
     device_str = str(device).split(':')[0]
     
     print("="*80)
     print(f"RRT + GLOBAL TRAJECTORY OPTIMIZATION (2D)")
-    if seed is not None: print(f"SEED: {seed}")
     print("="*80)
     
     print("\n[1] Generating RRT path...")
@@ -114,7 +108,7 @@ def global_optimization(seed, sence, model, solver, n_waypoints, safety_margin, 
     print(f"{'Workspace SDF':<20} | {str(ws_metrics['success']):<8} | {ws_metrics['path_length']:<10.3f} | {ws_metrics['min_clearance']:<8.4f} | {ws_metrics['smoothness']:<10.2f} | {ws_metrics['smoothness_p95']:<10.2f} | {t_ws:<8.2f}s")
     print(f"{'='*98}\n")
     
-    save_dir = "output/traj"
+    save_dir = "output/traj/" + args.world
     os.makedirs(save_dir, exist_ok=True)
     np.save(f"{save_dir}/rrt.npy", rrt_path)
     np.save(f"{save_dir}/ndf.npy", path_ndf)
@@ -140,8 +134,7 @@ def resample_path(path, n_points):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--world", type=str, default="obs10", help="Scene name")
-    parser.add_argument("--seed", type=int, default=555, help="Random seed")
+    parser.add_argument("--world", type=str, default="obs20", help="Scene name")
     parser.add_argument("--solver", type=str, choices=['ipopt', 'osqp', 'qpoases'], default="ipopt", help="Solver type")
     parser.add_argument("--n_waypoints", type=int, default=30, help="Number of waypoints")
     parser.add_argument("--safety_margin", type=float, default=0.005, help="Safety margin")
@@ -152,4 +145,4 @@ if __name__ == "__main__":
     model = "output/" + args.world + "/model_final.pt"
 
     device = get_device()
-    global_optimization(args.seed, sence, model, args.solver, args.n_waypoints, args.safety_margin, args.max_iter, device)
+    global_optimization(sence, model, args.solver, args.n_waypoints, args.safety_margin, args.max_iter, device)

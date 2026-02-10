@@ -63,17 +63,16 @@ def render_sdf_2d(render_path, contour_path, gradient_path, model, domain: M.geo
     extent = [domain.mini[0], domain.maxi[0], domain.mini[1], domain.maxi[1]]
     
     def _apply_pi_ticks(ax):
-        # 显示成 [-pi, pi] 风格的标签
-        labels = [r"$-\pi$", r"$-\pi/2$", r"$0$", r"$\pi/2$", r"$\pi$"]
-        
         if pi_mode == "0-2pi":
-            # 轴真实范围是 [0, 2pi]，但显示成 [-pi, pi]
+            # Axis range is [0, 2pi], label accordingly
+            labels = [r"$0$", r"$\pi/2$", r"$\pi$", r"$3\pi/2$", r"$2\pi$"]
             ticks = [0, np.pi/2, np.pi, 3*np.pi/2, 2*np.pi]
         elif pi_mode == "-pi-pi":
-            # 轴真实范围就是 [-pi, pi]
+            # Axis range is [-pi, pi]
+            labels = [r"$-\pi$", r"$-\pi/2$", r"$0$", r"$\pi/2$", r"$\pi$"]
             ticks = [-np.pi, -np.pi/2, 0.0, np.pi/2, np.pi]
         else:
-            return  # 未知模式就不动
+            return  # Unknown mode, do nothing
         
         ax.set_xticks(ticks)
         ax.set_xticklabels(labels)

@@ -57,15 +57,16 @@ class TrajectoryEvaluator:
         return not any(fp.intersect(o) for o in self.problem.workspace.obstacles)
 
     def evaluate(self, path, solve_time=0.0):
-        target_points = 512
-        # Always resample to exactly target_points equidistantly
-        dense = resample_path(np.asarray(path), target_points)
-            
-        # 1. Path Length
-        diffs = dense[1:] - dense[:-1]
+        path = np.asarray(path)
+        
+        # 1. Path Length (on original path)
+        diffs = path[1:] - path[:-1]
         path_length = float(np.sum(np.linalg.norm(diffs, axis=1)))
         
-        # 2. Collision Success & 3. Min Clearance
+        # 2. Collision Success & 3. Min Clearance (on DENSE path for accuracy)
+        target_points = 512
+        dense = resample_path(path, target_points)
+        
         success = True
         min_clearance = 1e6
         for q in dense:
@@ -82,12 +83,12 @@ class TrajectoryEvaluator:
             if success and step_min_clr <= 0:
                 success = False
         
-        # 4. Smoothness (Normalized Second-Difference)
-        if len(dense) > 2:
-            # Use actual spacing of the densified path for correct physical acceleration
-            h = 1.0 / (len(dense) - 1)
+        # 4. Smoothness (on ORIGINAL path to avoid interpolation artifacts)
+        if len(path) > 2:
+            # Average spacing on original path
+            h = path_length / (len(path) - 1)
             # (q_{i+1} - 2q_i + q_{i-1}) / h^2
-            accel_norms = np.linalg.norm((dense[2:] - 2*dense[1:-1] + dense[:-2]) / (h**2), axis=1)
+            accel_norms = np.linalg.norm((path[2:] - 2*path[1:-1] + path[:-2]) / (h**2), axis=1)
             sm_mean = float(np.mean(accel_norms))
             sm_p95 = float(np.percentile(accel_norms, 95))
         else:

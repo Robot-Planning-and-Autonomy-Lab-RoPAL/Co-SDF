@@ -1,5 +1,7 @@
 import torch
+import torch.nn.functional as F
 from .sll import DenseSDP
+from .mlp import MultiLayerPerceptron, MultiLayerPerceptronSkips
 import torch.nn as nn
 from .gndf import G_NDF
 
@@ -47,6 +49,23 @@ def load_model(path, device:str):
             link_lengths=link_lengths,
             device=device,
         )
+    elif model_type == "MLP":
+        model = MultiLayerPerceptron(*data["meta"])
+    elif model_type == "MLPS":
+        model = MultiLayerPerceptronSkips(*data["meta"])
+    elif model_type == "G-NDF-MLP":
+        from .gndf_mlp import G_NDF_MLP
+        n_layers, n_hidden, n_points_per_link, base_position, link_lengths, inner_type, skips = data["meta"]
+        model = G_NDF_MLP(
+            n_layers=n_layers,
+            n_hidden=n_hidden,
+            n_points_per_link=n_points_per_link,
+            base_position=base_position,
+            link_lengths=link_lengths,
+            device=device,
+            model_type=inner_type,
+            skips=skips
+        )
     else:
         raise Exception(f"Model type {model_type} not recognized")
     model.load_state_dict(data["state_dict"], strict=False)
@@ -55,10 +74,11 @@ def load_model(path, device:str):
 def select_model(name, DIM, n_layers, n_hidden, **kwargs):
     match name.lower():
         case "mlp":
-            final_activ = kwargs.get("final_activ", torch.nn.Identity)
-            return MultiLayerPerceptron(
-                DIM, n_hidden, n_layers, 
-                final_activ=final_activ)
+            return MultiLayerPerceptron(DIM, n_hidden, n_layers)
+        
+        case "mlps":
+            skips = kwargs.get("skips", [4])
+            return MultiLayerPerceptronSkips(DIM, n_hidden, n_layers, skips=skips)
         
         case "siren":
             return SirenNet(DIM, n_hidden, n_layers)
@@ -97,5 +117,18 @@ def select_model(name, DIM, n_layers, n_hidden, **kwargs):
                 device=kwargs.get("device", "cuda")
             )
         
+        case "gndf_mlp":
+            from .gndf_mlp import G_NDF_MLP
+            return G_NDF_MLP(
+                n_layers, 
+                n_hidden, 
+                n_points_per_link=kwargs.get("n_points_per_link", 2),
+                base_position=kwargs.get("base_position", [5.0, 5.0]),
+                link_lengths=kwargs.get("link_lengths", [2.1, 2.1]),
+                device=kwargs.get("device", "cuda"),
+                model_type=kwargs.get("model_type", "mlps"),
+                skips=kwargs.get("skips", [4])
+            )
+
         case _:
             raise Exception(f"model name {name} not recognized")

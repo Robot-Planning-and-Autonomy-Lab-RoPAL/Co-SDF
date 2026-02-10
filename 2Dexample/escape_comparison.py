@@ -2,16 +2,15 @@
 import os
 import json
 import time
-import numpy as np
 import torch
-from tqdm import tqdm
+import random
 import argparse
 import robot_tools
-import random
-
+import numpy as np
+from tqdm import tqdm
 from common.escape_utils import sample_near_boundary_collision, get_device
-from escape_gradient import GradientEscaper, load_2d_model
-from escape_sampling import SamplingEscaper
+from escape import GradientEscaper, load_2d_model
+from escape import SamplingEscaper
 
 def set_seed(seed):
     random.seed(seed)
@@ -22,11 +21,12 @@ def set_seed(seed):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified NDF Escape Benchmark")
-    parser.add_argument('--lip-path', default='output/block_world20/model_final.pt', help="Path to LIP-constrained model")
-    parser.add_argument('--siren-path', default='output/block_world20_siren/model_final.pt', help="Path to SIREN model")
-    parser.add_argument('--world-file', default='config/block_world20.yaml')
+    parser.add_argument('--lip-path', default='output/obs20/model_final.pt', help="Path to LIP-constrained model")
+    parser.add_argument('--siren-path', default='output/obs20_siren/model_final.pt', help="Path to SIREN model")
+    parser.add_argument('--mlp-path', default='output/obs20_mlp/model_final.pt', help="Path to MLP/DeepSDF model")
+    parser.add_argument('--world-file', default='config/obs20.yaml')
     parser.add_argument('--n-samples', type=int, default=2000)
-    parser.add_argument('--margins', type=float, nargs='+', default=[0.005, 0.01, 0.02], help="List of safety margins to test")
+    parser.add_argument('--margins', type=float, nargs='+', default=[0.005], help="List of safety margins to test")
     parser.add_argument('--max-steps', type=int, default=50)
     parser.add_argument('--lr-grad', type=float, default=0.2)
     parser.add_argument('--step-sampling', type=float, default=0.1)
@@ -44,6 +44,8 @@ if __name__ == "__main__":
         models["LIP"] = load_2d_model(args.lip_path, device)
     if args.siren_path:
         models["SIREN"] = load_2d_model(args.siren_path, device)
+    if args.mlp_path and os.path.exists(args.mlp_path):
+        models["MLP"] = load_2d_model(args.mlp_path, device)
 
     print(f"\n--- Phase 1: Sampling {args.n_samples} Boundary Points ---")
     q_starts = sample_near_boundary_collision(problem, args.n_samples)
@@ -77,6 +79,7 @@ if __name__ == "__main__":
             t0 = time.time()
             res = escaper.run(q0, **params)
             res['time'] = time.time() - t0
+            res['success'] = res['gt_success']
             results_map[name].append(res)
         
     def analyze(results):
@@ -85,7 +88,7 @@ if __name__ == "__main__":
         gt_steps = [r['gt_steps'] for r in results if r['gt_success']]
         ndf_steps = [r['ndf_steps'] for r in results if r['ndf_success']]
         dists = [np.linalg.norm(r['trajectory'][-1] - r['trajectory'][0]) for r in results if r['gt_success']]
-        avg_time = np.mean([r['time'] for r in results]) * 1000 # ms
+        avg_time = np.mean([r['time'] for r in results]) * 1000
         return {
             "gt_rate": np.mean(gt_succ) * 100,
             "ndf_rate": np.mean(ndf_succ) * 100,
@@ -97,24 +100,22 @@ if __name__ == "__main__":
     
     metrics = {name: analyze(res) for name, res in results_map.items()}
     
-    print(f"\n{'='*115}")
+    print(f"\n{'='*90}")
     print(f" ESCAPE BENCHMARK RESULTS (N={n_actual}, World={os.path.basename(args.world_file)})")
-    print(f"{'='*115}")
-    print(f"{'Method':<20} | {'GT Succ%':<10} | {'NDF Succ%':<10} | {'Steps(GT)':<10} | {'Steps(NDF)':<10} | {'Dist':<8} | {'Time/ms':<8}")
-    print(f"{'-'*115}")
+    print(f"{'='*90}")
+    print(f"{'Method':<20} | {'Success%':<10} | {'Steps':<10} | {'Dist':<8} | {'Time/ms':<8}")
+    print(f"{'-'*90}")
     for name, m in metrics.items():
-        print(f"{name:<20} | {m['gt_rate']:<10.1f} | {m['ndf_rate']:<10.1f} | {m['avg_gt_steps']:<10.1f} | {m['avg_ndf_steps']:<10.1f} | {m['avg_dist']:<8.3f} | {m['avg_time_ms']:<8.2f}")
-    print(f"{'='*115}\n")
+        print(f"{name:<20} | {m['gt_rate']:<10.1f} | {m['avg_ndf_steps']:<10.1f} | {m['avg_dist']:<8.3f} | {m['avg_time_ms']:<8.2f}")
+    print(f"{'='*90}\n")
     
     os.makedirs(args.output_dir, exist_ok=True)
     
     def simplify_results(results):
         return [
             {
-                "gt_success": r['gt_success'],
-                "ndf_success": r['ndf_success'],
-                "gt_steps": r['gt_steps'],
-                "ndf_steps": r['ndf_steps'],
+                "success": r['success'],
+                "steps": r['ndf_steps'],
                 "dist": np.linalg.norm(r['trajectory'][-1] - r['trajectory'][0]),
                 "time_ms": r['time'] * 1000
             } for r in results

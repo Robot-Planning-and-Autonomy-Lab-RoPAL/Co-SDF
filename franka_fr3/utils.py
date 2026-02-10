@@ -50,7 +50,6 @@ class ForwardKinematics(torch.nn.Module):
         def single_fk(q_single):
             transforms = []
             T_curr = torch.eye(4, device=q_single.device)
-            # Arm Joints 1-7
             for i in range(7):
                 R_stat = self._quat_to_matrix(self.offsets[i, 3:])
                 t_stat = self.offsets[i, :3]
@@ -63,14 +62,12 @@ class ForwardKinematics(torch.nn.Module):
                 T_curr = T_curr @ T_j
                 transforms.append(T_curr)
             
-            # Hand index 7
             R_h = self._quat_to_matrix(self.offsets[7, 3:])
             T_h_stat = torch.cat([torch.cat([R_h, self.offsets[7, :3].unsqueeze(1)], dim=1),
                                  torch.tensor([[0,0,0,1]], device=q_single.device)], dim=0)
             T_hand = T_curr @ T_h_stat
             transforms.append(T_hand)
             
-            # Fingers index 8, 9 (aligned with MJ ctrlrange 0.04)
             t_lf = self.offsets[8, :3] + torch.tensor([0, 0.04, 0], device=q_single.device)
             T_lf = torch.cat([torch.cat([torch.eye(3, device=q_single.device), t_lf.unsqueeze(1)], dim=1),
                             torch.tensor([[0,0,0,1]], device=q_single.device)], dim=0)
@@ -81,7 +78,7 @@ class ForwardKinematics(torch.nn.Module):
             T_rf = torch.cat([torch.cat([R_rf, t_rf.unsqueeze(1)], dim=1),
                             torch.tensor([[0,0,0,1]], device=q_single.device)], dim=0)
             transforms.append(T_hand @ T_rf)
-            return torch.stack(transforms) # (10, 4, 4)
+            return torch.stack(transforms)
 
         return tf.vmap(single_fk)(q)
 
@@ -135,17 +132,14 @@ def load_model(model_path, device, n_dim=7, n_layers=20, n_hidden=256, model_typ
         model = G_NDF(n_layers=n_layers, n_hidden=n_hidden, 
                       n_points_per_link=n_points_per_link, device=device).to(device)
     else:
-        # Standard SLL model
         model = select_model(model_type, n_dim, n_layers, n_hidden).to(device)
     
-    # Load weights
     checkpoint = torch.load(model_path, map_location=device)
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
         state_dict = checkpoint["state_dict"]
     else:
         state_dict = checkpoint
     
-    # Filter out metadata keys
     model_keys = set(model.state_dict().keys())
     state_dict = {k: v for k, v in state_dict.items() if k in model_keys}
     
@@ -153,7 +147,6 @@ def load_model(model_path, device, n_dim=7, n_layers=20, n_hidden=256, model_typ
     model.eval()
     
     return model
-
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
