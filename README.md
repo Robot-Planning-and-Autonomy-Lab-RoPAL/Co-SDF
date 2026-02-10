@@ -94,30 +94,11 @@ python trajectory_benchmark.py --world bookshelf --samples 100 --n_waypoints 30
 
 ---
 
-## Franka FR3 (7-DOF) Industrial Pipeline
-
-Comprehensive workflow from scene generation to optimized execution.
-
-### 1. Data Generation & Training
-```bash
-cd franka_fr3
-python data_generator.py --model scenes/bookshelf.xml --n-points 100000
-python train_lip.py --dataset bookshelf --model sll --n-layers 20 --n-hidden 512
-```
-
-### 2. Planning & Optimization
-```bash
-# Plan initial RRT path
-python rrt.py --start-layer 1 --goal-layer 2
-# Optimize with NDF
-python trajectory_optim.py --path output/traj/rrt.npy --waypoints 40 --interp 10
-```
-
----
-
 ## Visualization
 
-| RRT Path (Initial) | Optimized Path (NDF) |
+| RRT Path | Optimized Path (NDF) |
 | :---: | :---: |
 | ![RRT Path](assets/rrt.gif) | ![Optimized Path](assets/ndf.gif) |
+| ![RRT Path](assets/rrt_far.gif) | ![Optimized Path](assets/ndf_far.gif) |
+| ![RRT Path](assets/rrt_front.gif) | ![Optimized Path](assets/ndf_front.gif) |
 
