@@ -115,15 +115,6 @@ python trajectory_optim.py --path output/traj/rrt.npy --waypoints 40 --interp 10
 
 ---
 
-## Technical Safety Enhancements (7D)
-
-- **Anti-Tunneling**: Trajectory optimization performs dense interpolation along path segments to prevent "teleporting" through thin obstacles (e.g., bookshelf boards).
-- **XOR Collision Logic**: Ignores robot-self collisions to focus strictly on environment obstacle avoidance, matching the G-NDF training data standard.
-- **Hard Joint Bounds**: SLSQP optimizer uses native hard bounds for joint limits instead of soft constraints, ensuring 100% compliant configurations.
-- **Standardized Gripper**: All safety checks and renderings assume a fully **Open (0.04)** gripper state for maximum conservatism.
-
----
-
 ## Visualization
 
 | RRT Path (Initial) | Optimized Path (NDF) |
