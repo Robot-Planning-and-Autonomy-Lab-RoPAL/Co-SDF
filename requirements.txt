@@ -1,6 +1,5 @@
 numpy
 matplotlib
-argparse
 tqdm
 pyyaml
 scipy
@@ -10,3 +9,8 @@ mouette==1.2.2
 scikit-image
 mujoco
 imageio
+casadi
+l4casadi
+seaborn
+scikit-learn
+Pillow

@@ -1,13 +1,14 @@
 # Neural-Distance-Fields-for-Configuration-Space-Shape-Modeling
 
-This repository provides tools for modeling Configuration Space (C-space) shapes using 1-Lipschitz Neural Distance Fields (NDFs). It supports 2D arms, 3-DOF Jaco arms, and 7-DOF Franka FR3 arms, featuring advanced training techniques and robust NDF-based trajectory optimization.
+This repository provides tools for modeling Configuration Space (C-space) shapes using 1-Lipschitz Neural Distance Fields (NDFs). It supports 2D arms, 3-DOF Jaco arms, and 7-DOF Franka FR3 arms, featuring advanced training techniques, robust NDF-based trajectory optimization, and standardized benchmarking.
 
 ## Key Features
 
 - **Multi-scale Periodic Embedding**: Handles joint angle periodicity and captures high-frequency C-space boundary details.
-- **Eikonal Regularization**: Enforces unit gradient length for accurate and physically consistent distance fields.
-- **Intensive Refined Benchmarking**: Unified evaluation standard for 2D and 7-DOF platforms, focusing on boundary-based sampling and "escape" performance.
+- **Eikonal Regularization & 1-Lipschitz**: Enforces unit gradient length for accurate and physically consistent distance fields using Sandwiched Linear Layers (SLL).
+- **Intensive Refined Benchmarking**: Unified evaluation standard for 2D and 7-DOF platforms, focusing on boundary-based sampling, "escape" performance, and trajectory success rates.
 - **Advanced 7-DOF Pipeline**: Includes segment-level collision interpolation, XOR self-collision logic, and hard joint bound constraints.
+- **Paper-Ready Visualizations**: High-quality, publication-standard plots with consistent color schemes and geometric robot representations.
 
 ---
 
@@ -19,59 +20,97 @@ To install the necessary dependencies, run:
 pip install -r requirements.txt
 ```
 
+> [!NOTE]
+> For OMPL-based RRT baselines, ensure `ompl` Python bindings are installed in your environment.
+
 ---
 
 ## Project Structure
 
-- `2Dexample/`: Core scripts for the 2D arm environment (Boundary sampling & Escape tests).
-- `Jacoarm/`: Implementation for the 3-DOF Jaco robot arm.
-- `franka_fr3/`: Robust implementation for the 7-DOF Franka FR3 arm (RRT, NDF-Optimization, Safety Verification).
-- `common/`: Shared models and utilities.
+- **2Dexample/**: Core scripts for the 2D arm environment.
+    - `data_generator.py`: Configuration space sampling.
+    - `train_lip.py`: Training the 1-Lipschitz NDF.
+    - `correlation.py`, `escape.py`, `trajectory_benchmark.py`: Standard 2D evaluation suite.
+- **franka_fr3/**: Robust implementation for the 7-DOF Franka FR3 arm.
+    - `data_generator.py`: Configuration space sampling.
+    - `train_lip.py`: Training the 1-Lipschitz NDF.
+    - `correlation.py`, `escape.py`, `trajectory_benchmark.py`: Standard 7D evaluation suite.
 
 ---
 
-## Franka FR3 (7-DOF) Pipeline
+## 2D Intensive Evaluation & Benchmarking
 
-The `franka_fr3` directory provides a complete pipeline from sampling to optimized trajectory execution.
+The 2D environment serves as the primary testbed for NDF quality and optimization performance across three key standard experiments.
 
-### 1. Data Generation
-Generate a point cloud dataset of the C-space for a specific scene.
+### 1. Correlation Test (Numerical Quality)
+Evaluates the numerical consistency between NDF predictions and Ground Truth C-space SDF using Spearman correlation and classification metrics (F1, Accuracy).
 ```bash
-python data_generator.py --model scenes/bookshelf.xml --n-points 100000
+cd 2Dexample
+python correlation.py --world obs10 --n-samples 3000
 ```
 
-### 2. Training NDF
+### 2. Escape Test (Gradient Quality)
+Evaluates NDF gradient quality at the C-space boundaries. Samples are placed at the collision boundary and moved along the gradient to "escape" collision.
 ```bash
+python escape.py --world obs10 --n-samples 200
+```
+
+### 3. Trajectory Optimization Benchmark
+Compares NDF-based optimization against Workspace SDF baselines (IPOPT, OSQP, qpOASES) across 100 random planning problems.
+```bash
+python trajectory_benchmark.py --world obs10 --samples 100 --n_waypoints 30
+```
+
+### Visualization (Paper-Ready)
+Generate high-quality figures for specific trajectories.
+```bash
+python trajectory_fig.py --world obs10 --path_idx 0
+```
+
+---
+
+## Franka FR3 (7-DOF) Intensive Evaluation
+
+The 7-DOF pipeline is evaluated using higher-dimensional variants of the core experiments.
+
+### 1. Correlation Test (Numerical Quality)
+Evaluates NDF distance accuracy against MuJoCo-based approximate ground truth C-space distance.
+```bash
+cd franka_fr3
+python correlation.py --world obs30 --samples 3000
+```
+
+### 2. Escape Test (Gradient Quality)
+Evaluates the ability of the NDF gradient to guide the 7-DOF robot out of complex collision configurations.
+```bash
+python escape.py --world obs30 --samples 200
+```
+
+### 3. Trajectory Optimization Benchmark
+Comprehensive evaluation of NDF-based trajectory refinement against Workspace SDF across standard scenarios (e.g., bookshelf).
+```bash
+python trajectory_benchmark.py --world bookshelf --samples 100 --n_waypoints 30
+```
+
+---
+
+## Franka FR3 (7-DOF) Industrial Pipeline
+
+Comprehensive workflow from scene generation to optimized execution.
+
+### 1. Data Generation & Training
+```bash
+cd franka_fr3
+python data_generator.py --model scenes/bookshelf.xml --n-points 100000
 python train_lip.py --dataset bookshelf --model sll --n-layers 20 --n-hidden 512
 ```
 
-### 3. RRT Planning & Optimization
-Find a path and refine it using the high-dimensional NDF field.
+### 2. Planning & Optimization
 ```bash
-# Plan a shelf-to-shelf path
+# Plan initial RRT path
 python rrt.py --start-layer 1 --goal-layer 2
-# Optimize with NDF (Joint/Workspace smoothness + Interpolated safety)
+# Optimize with NDF
 python trajectory_optim.py --path output/traj/rrt.npy --waypoints 40 --interp 10
-```
-
-### 4. Benchmarking (Escape Test)
-Evaluate NDF quality at physical boundaries using the "Intensive Refined" standard.
-```bash
-# Sampling-based escape logic
-python sampling_escape.py --scene scenes/table_obstacles_10.xml --n-samples 200
-```
-
----
-
-## 2D Intensive Evaluation
-
-Evaluate the 2D C-space model using boundary-based gradient escape.
-```bash
-cd 2Dexample
-# Test NDF Gradient quality at the edge
-python escape.py --n-samples 200 --lr 0.05
-# Test NDF Numerical quality via sampling
-python ndf_sampling.py --K-sampling 50
 ```
 
 ---
@@ -86,11 +125,8 @@ python ndf_sampling.py --K-sampling 50
 ---
 
 ## Visualization
-Trajectories and benchmarking results generate comparative GIFs and data in `output/traj/`.
 
 | RRT Path (Initial) | Optimized Path (NDF) |
 | :---: | :---: |
-| ![RRT Path](franka_fr3/output/traj/rrt_far.gif) | ![Optimized Path](franka_fr3/output/traj/optim_far.gif) |
+| ![RRT Path](assets/rrt.gif) | ![Optimized Path](assets/ndf.gif) |
 
-> [!TIP]
-> Use `trajectory_plot.py` to generate multi-view GIFs for any `.npy` trajectory file.
