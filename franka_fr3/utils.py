@@ -150,3 +150,30 @@ def load_model(model_path, device, n_dim=7, n_layers=20, n_hidden=256, model_typ
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def transform_points(points, T, device='cuda'):
+    """
+    Transform points by a 4x4 matrix T.
+    points: (N, 3) or (B, N, 3)
+    T: (4, 4) or (B, 4, 4) or (B*K, 4, 4)
+    """
+    # Normalize shapes
+    if points.ndim == 2:
+        points = points.unsqueeze(0)
+    if T.ndim == 2:
+        T = T.unsqueeze(0)
+    
+    B_pts, N, _ = points.shape
+    B_T, _, _ = T.shape
+    
+    if B_pts == 1 and B_T > 1:
+        points = points.expand(B_T, -1, -1)
+    
+    B, N, _ = points.shape
+    ones = torch.ones(B, N, 1, device=device)
+    points_homo = torch.cat([points, ones], dim=2) # (B, N, 4)
+    
+    # points_homo: (B, N, 4), T: (B, 4, 4)
+    # transformed: (B, N, 4)
+    transformed_homo = torch.bmm(points_homo, T.transpose(1, 2))
+    return transformed_homo[:, :, :3]

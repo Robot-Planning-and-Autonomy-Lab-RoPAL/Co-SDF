@@ -7,7 +7,7 @@ import argparse
 import re
 from glob import glob
 
-def plot_7d_escape_comparison(results_dir, output_path, target_margin=0.02):
+def plot_7d_escape_comparison(results_dir, output_path):
     json_files = sorted(glob(os.path.join(results_dir, "results_7d_obs*.json")), 
                         key=lambda x: int(re.search(r'\d+', x).group()))
     
@@ -16,8 +16,13 @@ def plot_7d_escape_comparison(results_dir, output_path, target_margin=0.02):
         return
 
     data_map = {}
-    all_margins = set()
-    all_methods = ["Gradient", "Sampling"]
+    all_methods = ["Co-SDF Gradient", "Co-SDF Sampling"]
+    
+    # Method name mapping from JSON keys to display names
+    name_map = {
+        "Gradient": "Co-SDF Gradient",
+        "Sampling": "Co-SDF Sampling",
+    }
     
     for f_path in json_files:
         with open(f_path, 'r') as f:
@@ -25,46 +30,61 @@ def plot_7d_escape_comparison(results_dir, output_path, target_margin=0.02):
         
         world_name = data.get("world", os.path.basename(f_path)).replace(".json", "")
         summary = data.get("summary", {})
+        details = data.get("details", {})
         
         world_data = {}
         for key, metrics in summary.items():
-            match = re.search(r"([\w\s]+) \(M=([\d\.]+)\)", key)
-            if match:
-                method_base = match.group(1).strip()
-                margin = float(match.group(2))
-                all_margins.add(margin)
-                if margin not in world_data: world_data[margin] = {}
-                world_data[margin][method_base] = metrics
+            # Try new format first (plain name like "Gradient")
+            display_name = name_map.get(key, None)
+            
+            # Fallback: old format "Gradient (M=0.02)"
+            if display_name is None:
+                match = re.search(r"([\w\s]+) \(M=([\d\.]+)\)", key)
+                if match:
+                    method_base = match.group(1).strip()
+                    display_name = name_map.get(method_base, method_base)
+            
+            if display_name is None:
+                continue
+
+            # Re-calculate avg_steps and avg_dist for success only
+            method_details = details.get(key, [])
+            success_trials = [d for d in method_details if d.get("success", False)]
+            if success_trials:
+                metrics["avg_steps"] = np.mean([d["steps"] for d in success_trials])
+                metrics["avg_escape_dist"] = np.mean([d["dist"] for d in success_trials])
+            
+            world_data[display_name] = metrics
         
         data_map[world_name] = world_data
 
     worlds = sorted(data_map.keys(), key=lambda x: int(re.search(r'\d+', x).group()))
-    
-    margins = sorted(list(all_margins))
-    if not any(np.isclose(target_margin, m) for m in margins):
-        target_margin = margins[0] if margins else 0.02
 
     metrics_info = [
-        ("gt_rate", "Success Rate (%)", [0, 110]),
-        ("avg_ndf_steps", "Avg. Escape Steps", None),
-        ("avg_dist", "Avg. Joint Displacement (rad)", None),
-        ("avg_time_ms", "Escape Time (ms)", None)
+        ("success_rate", "Success Rate (%)", [0, 110]),
+        ("avg_steps", "Avg. Escape Steps", None),
+        ("mae_vs_gt", "MAE (rad)", None),
+        ("avg_gt_dist", "Avg. C-space Disp (rad)", None),
+        ("avg_time_ms", "Time (ms)", None)
     ]
 
     plt.rcParams.update({
         "font.family": "serif",
-        "font.size": 18,
-        "axes.labelsize": 18,
-        "axes.titlesize": 20,
-        "xtick.labelsize": 16,
-        "ytick.labelsize": 16,
-        "legend.fontsize": 16,
+        "font.size": 36,
+        "axes.labelsize": 40,
+        "axes.titlesize": 42,
+        "xtick.labelsize": 36,
+        "ytick.labelsize": 36,
+        "legend.fontsize": 36,
     })
 
-    fig, axes = plt.subplots(1, 4, figsize=(28, 7))
+    n_metrics = len(metrics_info)
+    fig, axes = plt.subplots(1, n_metrics, figsize=(9 * n_metrics, 10))
+    if n_metrics == 1:
+        axes = [axes]
     
-    colors = ['#0072B2', '#E69F00'] 
-    hatches = ['', '']
+    colors = ['#0072B2', '#0072B2'] 
+    hatches = ['', '////']
 
     x = np.arange(len(worlds))
     width = 0.35
@@ -72,7 +92,7 @@ def plot_7d_escape_comparison(results_dir, output_path, target_margin=0.02):
     for idx, (m_key, title, ylim) in enumerate(metrics_info):
         ax = axes[idx]
         for i, method in enumerate(all_methods):
-            vals = [data_map[w].get(target_margin, {}).get(method, {}).get(m_key, 0.0) for w in worlds]
+            vals = [data_map[w].get(method, {}).get(m_key, 0.0) for w in worlds]
             offset = (i - 0.5) * width
             
             ax.bar(x + offset, vals, width, 
@@ -93,8 +113,9 @@ def plot_7d_escape_comparison(results_dir, output_path, target_margin=0.02):
         ax.spines['top'].set_visible(False)
 
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.08), 
-               ncol=2, fontsize=18, frameon=False)
+    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), 
+               ncol=2, fontsize=32, frameon=False,
+               handlelength=3.0, handleheight=1.5)
     
     plt.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -105,7 +126,6 @@ def plot_7d_escape_comparison(results_dir, output_path, target_margin=0.02):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--results-dir', default='output/escape')
-    parser.add_argument('--target-margin', type=float, default=0.02)
     parser.add_argument('--output', default='output/escape/escape.png')
     args = parser.parse_args()
-    plot_7d_escape_comparison(args.results_dir, args.output, args.target_margin)
+    plot_7d_escape_comparison(args.results_dir, args.output)

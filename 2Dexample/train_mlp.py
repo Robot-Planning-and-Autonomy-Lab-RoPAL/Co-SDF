@@ -15,7 +15,7 @@ from common.callback import *
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MLP/DeepSDF Eikonal Trainer")
-    parser.add_argument("--world", type=str, default="obs20", help="name of the world")
+    parser.add_argument("--world", type=str, default="block_world2", help="name of the world")
     parser.add_argument("--n-hidden", type=int, default=256, help="size of the layers")
     parser.add_argument("--n-layers", type=int, default=8, help="number of layers")
     parser.add_argument("--model", type=str, default="gndf_mlp", help="model type (gndf_mlp, mlp, mlps)")

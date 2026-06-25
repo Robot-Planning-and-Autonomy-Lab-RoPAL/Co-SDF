@@ -1,0 +1,69 @@
+robot:
+  parameters:
+    base_position:
+    - 5.0
+    - 5.0
+    link_lengths:
+    - 2.1
+    - 2.1
+  type: RobotArm2D
+workspace:
+  parameters:
+    limits:
+    - - 0.0
+      - 10.0
+    - - 0.0
+      - 10.0
+    obstacles:
+    # --- Original 4 from block_world4 ---
+    - parameters:
+        xlim:
+        - 4.323292212984942
+        - 5.4420866769932905
+        ylim:
+        - 7.114150656041032
+        - 8.520826414931935
+      type: Rectangle
+
+    - parameters:
+        center:
+        - 4.592896121634134
+        - 2.870114948336899
+        radius: 0.58788808382299655
+      type: Circle
+
+    - parameters:
+        xlim:
+        - 7.2
+        - 8.5
+        ylim:
+        - 6.5
+        - 8.0
+      type: Rectangle
+
+    - parameters:
+        p_in:
+        - [2.0, 4.5]
+        - [3.5, 4.5]
+        - [3.0, 6.0]
+        - [1.5, 5.5]
+      type: Polygon
+
+    # --- 2 new obstacles ---
+    - parameters:
+        center:
+        - 7.5
+        - 3.5
+        radius: 0.7
+      type: Circle
+
+    - parameters:
+        xlim:
+        - 1.5
+        - 2.8
+        ylim:
+        - 7.5
+        - 9.0
+      type: Rectangle
+
+  type: Workspace2D

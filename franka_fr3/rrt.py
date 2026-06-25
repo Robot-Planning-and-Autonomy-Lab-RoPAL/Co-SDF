@@ -64,7 +64,7 @@ class RRT:
         """Convenience method for numpy arrays."""
         return not check_franka_collision(self.mj_model, self.mj_data, q, self.is_robot_body)
 
-    def plan(self, start_q=None, goal_q=None, output_file="franka_rrt_path.npy", timeout=10.0, n_waypoints=100):
+    def plan(self, start_q=None, goal_q=None, output_file=None, timeout=10.0, n_waypoints=100):
         if start_q is None:
             print("Sampling valid start state...")
             start_state = self.get_valid_random_state()

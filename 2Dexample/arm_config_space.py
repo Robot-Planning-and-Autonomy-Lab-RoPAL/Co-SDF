@@ -13,7 +13,6 @@ import matplotlib.patheffects as path_effects
 from matplotlib.colors import TwoSlopeNorm
 from common.models import load_model
 from cspace_sdf import cobs_sdf_on_torus
-from matplotlib.ticker import MultipleLocator
 from matplotlib.patches import Polygon as PlotPolygon, Circle as PlotCircle
 from matplotlib.collections import PatchCollection
 """ 
@@ -46,12 +45,12 @@ else:
 
 # IROS-style plotting settings
 plt.rcParams.update({
-    'font.size': 11,
-    'axes.labelsize': 12,
-    'axes.titlesize': 12,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'legend.fontsize': 10,
+    'font.size': 30,
+    'axes.labelsize': 30,
+    'axes.titlesize': 30,
+    'xtick.labelsize': 30,
+    'ytick.labelsize': 30,
+    'legend.fontsize': 30,
     'lines.linewidth': 2.0,
     'axes.linewidth': 1.0,
     'grid.linewidth': 0.5,
@@ -59,6 +58,89 @@ plt.rcParams.update({
 })
 
 colour_map = matplotlib.colors.ListedColormap([[0.20, 0.50, 0.70, 1.0]])
+
+AXIS_TEXT_COLOR = '#4A4A4A'
+AXIS_SPINE_COLOR = '#7A7A7A'
+WORKSPACE_BG = '#F2F1EC'
+CSPACE_BG = '#F0EFE9'
+
+
+def _set_theta_ticks(ax, single_origin_zero=True):
+    if single_origin_zero:
+        ax.set_xticks([0, np.pi, 2 * np.pi])
+        ax.set_yticks([np.pi, 2 * np.pi])
+        ax.set_xticklabels([r'$0$', r'$\pi$', r'$2\pi$'])
+        ax.set_yticklabels([r'$\pi$', r'$2\pi$'])
+    else:
+        ax.set_xticks([0, np.pi, 2 * np.pi])
+        ax.set_yticks([0, np.pi, 2 * np.pi])
+        ax.set_xticklabels([r'$0$', r'$\pi$', r'$2\pi$'])
+        ax.set_yticklabels([r'$0$', r'$\pi$', r'$2\pi$'])
+
+
+def _style_axes(ax, *, grid=False):
+    ax.set_axisbelow(True)
+    ax.minorticks_off()
+    ax.grid(grid, which='major', axis='both', linestyle='--', alpha=0.18 if grid else 0.0)
+
+    for side in ('top', 'right'):
+        ax.spines[side].set_visible(False)
+    for side in ('left', 'bottom'):
+        ax.spines[side].set_visible(True)
+        ax.spines[side].set_linewidth(0.9)
+        ax.spines[side].set_color(AXIS_SPINE_COLOR)
+        ax.spines[side].set_alpha(0.7)
+
+    ax.tick_params(colors=AXIS_TEXT_COLOR, length=3.0, width=0.8, pad=3)
+    ax.xaxis.label.set_color('black')
+    ax.yaxis.label.set_color('black')
+
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_color(AXIS_TEXT_COLOR)
+        label.set_alpha(0.9)
+
+
+def _style_workspace_axes(ax):
+    ax.set_facecolor(WORKSPACE_BG)
+    _style_axes(ax, grid=False)
+    ax.spines['left'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+    ax.tick_params(length=0)
+
+
+def _style_cspace_axes(ax):
+    ax.set_facecolor(CSPACE_BG)
+    _style_axes(ax, grid=False)
+
+
+def _ticks_without_zero(lim, step=2.0, keep_zero=False):
+    lo, hi = float(lim[0]), float(lim[1])
+    start = np.ceil(lo / step) * step
+    end = np.floor(hi / step) * step
+    if end < start:
+        return []
+    ticks = np.arange(start, end + 0.5 * step, step)
+    if keep_zero:
+        return list(ticks)
+    return [t for t in ticks if not np.isclose(t, 0.0)]
+
+
+def _draw_checkerboard_background(ax, xlim, ylim, cell=2.0):
+    x0, x1 = float(xlim[0]), float(xlim[1])
+    y0, y1 = float(ylim[0]), float(ylim[1])
+    nx = max(1, int(np.ceil((x1 - x0) / cell)))
+    ny = max(1, int(np.ceil((y1 - y0) / cell)))
+    board = (np.add.outer(np.arange(nx), np.arange(ny)) % 2).T
+    checker_cmap = matplotlib.colors.ListedColormap([WORKSPACE_BG, '#ECEBE4'])
+    ax.imshow(
+        board,
+        origin='lower',
+        extent=[x0, x1, y0, y1],
+        interpolation='nearest',
+        cmap=checker_cmap,
+        alpha=1.0,
+        zorder=0,
+    )
 
 def angle_wrap(angles):
     return angles % (2 * np.pi)
@@ -93,9 +175,13 @@ def plot_config_space(ax,
       xy = shape_to_xy(o, n=256)
       h_obs.append(PlotPolygon(xy, closed=True, zorder=1))
         
-    c_obs = PatchCollection(h_obs, cmap=col_map, edgecolors='none')
+    c_obs = PatchCollection(h_obs, cmap=col_map, edgecolors='#2E5E86', linewidths=0.7)
     c_obs.set_array(np.linspace(0, 1.0, len(obstacles) + 1)[1:])
-    c_obs.set_path_effects([path_effects.withSimplePatchShadow(offset=(1, -1), shadow_rgbFace='gray', alpha=0.3)])
+    c_obs.set_alpha(0.9)
+    c_obs.set_path_effects([
+        path_effects.withSimplePatchShadow(offset=(0.8, -0.8), shadow_rgbFace=(0, 0, 0), alpha=0.10),
+        path_effects.Normal(),
+    ])
     ax[0].add_collection(c_obs)
 
     # Plot Robot using exact geometry (Collision Shapes)
@@ -114,20 +200,24 @@ def plot_config_space(ax,
                      abs(shape.center.y - spine_points[1][-1]) < 1e-5)
             c = 'black' if is_ee else '#E74C3C' # Black EE, Red Joints
             patch = PlotCircle((shape.center.x, shape.center.y), shape.radius, 
-                              facecolor=c, edgecolor='white', linewidth=0.5, zorder=5)
+                              facecolor=c, edgecolor='white', linewidth=0.7, zorder=5)
+            patch.set_path_effects([
+                path_effects.withSimplePatchShadow(offset=(0.45, -0.45), shadow_rgbFace=(0, 0, 0), alpha=0.10),
+                path_effects.Normal(),
+            ])
             ax[0].add_patch(patch)
             if is_ee: h_ee = patch
             else: h_joints.append(patch)
         else:
             # Link body
-            patch = PlotPolygon(shape_to_xy(shape), facecolor='#F39C12', edgecolor='none', 
-                               alpha=0.9, zorder=4)
+            patch = PlotPolygon(shape_to_xy(shape), facecolor='#F39C12', edgecolor='#C47E0D',
+                               linewidth=0.8, alpha=0.98, zorder=4)
+            patch.set_path_effects([
+                path_effects.withSimplePatchShadow(offset=(0.6, -0.6), shadow_rgbFace=(0, 0, 0), alpha=0.10),
+                path_effects.Normal(),
+            ])
             ax[0].add_patch(patch)
             h_arm_parts.append(patch)
-    
-    # Add shadow to the first link part for depth
-    if h_arm_parts:
-        h_arm_parts[0].set_path_effects([path_effects.withSimplePatchShadow(offset=(0.5, -0.5), alpha=0.2)])
 
     for a in ax:
         a.set_aspect('equal')
@@ -135,44 +225,38 @@ def plot_config_space(ax,
     # Remove titles and labels for paper
     # ax[0].set_xlabel(r'$x$')
     # ax[0].set_ylabel(r'$y$')
-    # ax[1].set_xlabel(r'$\theta_1$')
-    # ax[1].set_ylabel(r'$\theta_2$')
+    ax[1].set_xlabel(r'$\theta$1')
+    ax[1].set_ylabel(r'$\theta$2')
 
     ax[0].set_xlim(xlim)
     ax[0].set_ylim(ylim)
-    ax[0].set_xticks([2, 4, 6, 8, 10])
-    ax[0].set_yticks([2, 4, 6, 8, 10])
+    _draw_checkerboard_background(ax[0], xlim, ylim, cell=2.0)
+    ax[0].set_xlabel(r'$x$')
+    ax[0].set_ylabel(r'$y$')
+    ax[0].set_xticks(_ticks_without_zero(xlim, step=2.0, keep_zero=True))
+    ax[0].set_yticks(_ticks_without_zero(ylim, step=2.0, keep_zero=False))
     
     ax[1].set_xlim(theta1_lim[0], theta1_lim[-1])
     ax[1].set_ylim(theta2_lim[0], theta2_lim[-1])
+    _set_theta_ticks(ax[1], single_origin_zero=True)
+    _style_workspace_axes(ax[0])
+    _style_cspace_axes(ax[1])
 
-    ax[0].xaxis.set_major_locator(MultipleLocator(2.0))
-    ax[0].xaxis.set_minor_locator(MultipleLocator(1.0))
-    ax[0].yaxis.set_major_locator(MultipleLocator(2.0))
-    ax[0].yaxis.set_minor_locator(MultipleLocator(1.0))
-    ax[1].set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
-    ax[1].set_yticks([0, np.pi/2, np.pi, 3*np.pi/2, 2*np.pi])
-    ax[1].set_xticklabels([r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$'])
-    ax[1].set_yticklabels([r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$'])
-    
-    for a in ax:
-        a.grid(which='major', axis='both', linestyle='--', alpha=0.3)
-        a.set_axisbelow(True)
-        a.minorticks_off()
-        for spine in a.spines.values():
-            spine.set_linewidth(1.0)
-            spine.set_color('#34495E')
-            spine.set_alpha(0.8)
-        for label in a.get_xticklabels() + a.get_yticklabels():
-            label.set_color('#2C3E50')
-            label.set_alpha(0.8)
-        a.tick_params(colors='gray', length=0, width=0)
-
-    cspace_array = np.ma.masked_where(cspace_array == 0.0, cspace_array)
-    col_map.set_bad(color='white')
+    cspace_binary = (np.asarray(cspace_array) != 0).astype(float)
+    cspace_array = np.ma.masked_where(cspace_binary == 0.0, cspace_binary)
+    col_map.set_bad(color=CSPACE_BG)
     ax[1].imshow(cspace_array.transpose(), origin='lower', cmap=col_map,
                  extent=[theta1_lim[0], theta1_lim[1], theta2_lim[0], theta2_lim[1]],
-                 interpolation='bilinear', alpha=0.95)
+                 interpolation='nearest', alpha=0.92)
+    # ax[1].contour(
+    #     cspace_binary.transpose(),
+    #     levels=[0.5],
+    #     colors=['#17324A'],
+    #     linewidths=1.0,
+    #     alpha=0.95,
+    #     origin='lower',
+    #     extent=[theta1_lim[0], theta1_lim[1], theta2_lim[0], theta2_lim[1]],
+    # )
     
     if heat is not None:
         hm = ax[1].imshow(heat.T, origin='lower', extent=heat_extent,
@@ -180,8 +264,8 @@ def plot_config_space(ax,
 
         ax[1]._heatmap_handle = hm
 
-    # Return h_arm as the list of link polygons for simple compatibility with animator if needed
-    return h_arm_parts[0] if h_arm_parts else None, h_joints, h_ee
+    # Return arm parts for animation updates
+    return h_arm_parts, h_joints, h_ee
 
 class ArmAnimator(object):
     h_arm = None
@@ -268,9 +352,9 @@ class ArmAnimator(object):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Plot the config space from Fig 6.1 in Intro to AMR textbook')
     parser.add_argument('--nx', type=int, default=201, help='Resolution (n points in each dimension)')
-    parser.add_argument('--world', default='block_world1', help='World name')
+    parser.add_argument('--world', default='block_world4', help='World name')
     parser.add_argument('--save-animation', default=None, help='Save animation to file')
-    parser.add_argument('--no-animation', default=False, action='store_true', help='Don\'t animate')
+    parser.add_argument('--no-animation', default=False, help='Don\'t animate')
     parser.add_argument('--arm-shadows', type=int, default=0, help='Plot shadows of arm position every n steps (0 for off)')
     args = parser.parse_args()
 
@@ -305,7 +389,7 @@ if __name__ == "__main__":
     except KeyError:
         map_lims = [[0, 10], [0, 10]]
 
-    initial_pose = np.array([np.pi/5, np.pi/2.5])
+    initial_pose = np.array([np.pi/4, np.pi/3])
     arm_problem.robot.set_link_angles(initial_pose)
     plot_config_space(
         a1,
@@ -319,11 +403,11 @@ if __name__ == "__main__":
         theta[1][[0, -1]],
     )
     
-    a1[1].plot(initial_pose[0], initial_pose[1], 'o', color='#E74C3C', markersize=8, 
-              markeredgewidth=1.5, markeredgecolor='white', zorder=10)
+    # a1[1].plot(initial_pose[0], initial_pose[1], 'o', color='#E74C3C', markersize=8, 
+    #           markeredgewidth=1.5, markeredgecolor='white', zorder=10)
     
-    plt.setp(a1[1].get_xticklabels(), visible=False)
-    a1[1].set_xlabel('')
+    # plt.setp(a1[1].get_xticklabels(), visible=False)
+    # a1[1].set_xlabel('')
     
     model_path = f'output/{args.world}/model_final.pt'
     if os.path.exists(model_path):
@@ -357,31 +441,13 @@ if __name__ == "__main__":
                 a1[2].imshow(sdf_values.cpu().numpy(), origin='lower', cmap='seismic', 
                             extent=extent, norm=norm, interpolation='nearest', alpha=0.95)
                 
-                # a1[2].set_xlabel(r'$\theta_1$')
-                # a1[2].set_ylabel(r'$\theta_2$')
+                a1[2].set_xlabel(r'$\theta$1')
+                a1[2].set_ylabel(r'$\theta$2')
                 a1[2].set_xlim(extent[0], extent[1])
                 a1[2].set_ylim(extent[2], extent[3])
-                a1[2].set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
-                a1[2].set_yticks([0, np.pi/2, np.pi, 3*np.pi/2, 2*np.pi])
-                a1[2].set_xticklabels([r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$'])
-                a1[2].set_yticklabels([r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$'])
-                
-                for label in a1[2].get_xticklabels() + a1[2].get_yticklabels():
-                    label.set_color('#2C3E50')
-                    label.set_alpha(0.8)
+                _set_theta_ticks(a1[2], single_origin_zero=True)
                 a1[2].set_aspect('equal')
-                a1[2].grid(which='major', axis='both', linestyle='--', alpha=0.3)
-                a1[2].set_axisbelow(True)
-                a1[2].minorticks_off()
-                for spine in a1[2].spines.values():
-                    spine.set_linewidth(1.0)
-                    spine.set_color('#34495E')
-                    spine.set_alpha(0.8)
-                # a1[2].xaxis.label.set_color('#2C3E50')
-                # a1[2].xaxis.label.set_alpha(0.9)
-                # a1[2].yaxis.label.set_color('#2C3E50')
-                # a1[2].yaxis.label.set_alpha(0.9)
-                a1[2].tick_params(colors='gray', length=0, width=0)
+                _style_cspace_axes(a1[2])
         except Exception as e:
             import traceback
             traceback.print_exc()

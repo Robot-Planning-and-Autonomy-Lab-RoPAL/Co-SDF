@@ -7,7 +7,7 @@ import numpy as np
 import seaborn as sns
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, pearsonr
 from sklearn.metrics import f1_score, confusion_matrix
 from common.models import load_model
 from common.utils import get_device
@@ -26,15 +26,13 @@ def set_seed(seed):
 _GT_MJ_MODEL = None
 _GT_MJ_DATA = None
 _GT_IS_ROBOT = None
-_GT_EXHAUSTIVE = False
 
-def _init_gt_worker(scene_xml, robot_body_indices, exhaustive=False):
-    global _GT_MJ_MODEL, _GT_MJ_DATA, _GT_IS_ROBOT, _GT_EXHAUSTIVE
+def _init_gt_worker(scene_xml, robot_body_indices):
+    global _GT_MJ_MODEL, _GT_MJ_DATA, _GT_IS_ROBOT
     _GT_MJ_MODEL = mujoco.MjModel.from_xml_path(scene_xml)
     _GT_MJ_DATA = mujoco.MjData(_GT_MJ_MODEL)
     _GT_IS_ROBOT = np.zeros(_GT_MJ_MODEL.nbody, dtype=bool)
     _GT_IS_ROBOT[robot_body_indices] = True
-    _GT_EXHAUSTIVE = exhaustive
 
 def _worker_dist_approx(q):
     mj_model, mj_data, is_robot = _GT_MJ_MODEL, _GT_MJ_DATA, _GT_IS_ROBOT
@@ -58,6 +56,8 @@ def _worker_dist_approx(q):
         return False, []
 
     lo, hi = mj_model.jnt_range[:7, 0], mj_model.jnt_range[:7, 1]
+    # Use a fixed truncation radius of 1.6 rad
+    R_max = 1.6
     coll_info = check_collision(q)
     is_coll = coll_info[0]
     
@@ -89,31 +89,12 @@ def _worker_dist_approx(q):
         if found_crossing and current_min < radius * 0.7:
             break
             
-    if not found_crossing and _GT_EXHAUSTIVE:
-        r_step = 1.6
-        while r_step < 6.0 and not found_crossing:
-            r_step += 0.8
-            for _ in range(20):
-                delta = np.random.randn(7) * weights
-                delta = (delta / (np.linalg.norm(delta) + 1e-9)) * r_step * np.random.rand()
-                q_test = np.clip(q + delta, lo, hi)
-                c_test_info = check_collision(q_test)
-                if c_test_info[0] != is_coll:
-                    found_crossing = True
-                    q_cross, q_orig = q_test, q
-                    for _ in range(9):
-                        mid = (q_cross + q_orig) / 2
-                        if check_collision(mid)[0] != is_coll: q_cross = mid
-                        else: q_orig = mid
-                    current_min = np.linalg.norm(q_cross - q)
-                    break
-
     if not found_crossing:
         return is_coll, np.nan, False, coll_info[1] if is_coll else []
 
     return is_coll, current_min if not is_coll else -current_min, True, coll_info[1] if is_coll else []
 
-def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, device, exhaustive=False):
+def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, device):
 
     model = load_model(model_path, device)
     model.eval()
@@ -131,50 +112,56 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, devic
                 break
             curr = mj_model.body_parentid[curr]
 
-    print(f"Sampling {n_samples} points in 7D...")
+    print(f"Mining {n_samples} valid points in 7D...")
     lo, hi = mj_model.jnt_range[:7, 0], mj_model.jnt_range[:7, 1]
-    qs = lo + np.random.rand(n_samples, 7) * (hi - lo)
     
-    cp_manager = ControlPoint(device=device, n_points_per_link=1)
+    valid_qs = []
+    valid_results = []
+    
+    from multiprocessing import Pool
+    with Pool(initializer=_init_gt_worker, initargs=(abs_xml, robot_body_indices)) as pool:
+        pbar = tqdm(total=n_samples, desc="GT Analysis (Mining valid points)")
+        while len(valid_results) < n_samples:
+            needed = n_samples - len(valid_results)
+            batch_size = max(100, int(needed * 1.5))
+            qs_batch = lo + np.random.rand(batch_size, 7) * (hi - lo)
+            
+            for q, res in zip(qs_batch, pool.imap(_worker_dist_approx, qs_batch)):
+                if res[2]: # hit_flag is True
+                    valid_qs.append(q)
+                    valid_results.append(res)
+                    pbar.update(1)
+                    if len(valid_results) >= n_samples:
+                        break
+        pbar.close()
+        
+    qs = np.array(valid_qs)
     
     ndf_vals = []
-    batch_size = 1000
-    for i in range(0, n_samples, batch_size):
-        q_batch = torch.from_numpy(qs[i:i+batch_size]).float().to(device)
+    batch_size_eval = 1000
+    for i in range(0, n_samples, batch_size_eval):
+        q_batch = torch.from_numpy(qs[i:i+batch_size_eval]).float().to(device)
         
         with torch.no_grad():
             ndf_outputs = model(q_batch).squeeze()
             if ndf_outputs.dim() == 0: ndf_outputs = ndf_outputs.unsqueeze(0)
             ndf_vals.extend(ndf_outputs.cpu().numpy().tolist())
     ndf_vals = np.array(ndf_vals)
-
-    from multiprocessing import Pool
-    with Pool(initializer=_init_gt_worker, initargs=(abs_xml, robot_body_indices, exhaustive)) as pool:
-        results = list(tqdm(pool.imap(_worker_dist_approx, qs), total=n_samples, desc="GT Analysis"))
     
-    gt_labels = np.array([r[0] for r in results])
-    approx_dist = np.array([r[1] for r in results])
-    hit_flags = np.array([r[2] for r in results])
-    coll_pairs_list = [r[3] for r in results]
+    gt_labels = np.array([r[0] for r in valid_results])
+    approx_dist = np.array([r[1] for r in valid_results])
+    coll_pairs_list = [r[3] for r in valid_results]
     
-    hit_mask = hit_flags
-    if np.any(hit_mask):
-        corr_dist, _ = spearmanr(approx_dist[hit_mask], ndf_vals[hit_mask])
-    else:
-        corr_dist = 0.0
-    
-    corr_binary, _ = spearmanr(ndf_vals, -gt_labels.astype(float))
-    
-    hit_rate = np.mean(hit_flags) * 100
+    corr_dist_spearman, _ = spearmanr(approx_dist, ndf_vals)
+    corr_dist_pearson, _ = pearsonr(approx_dist, ndf_vals)
     
     y_true = gt_labels
     fixed_thresh = getattr(args, "fixed_thresh", None)
     if fixed_thresh is not None:
-        best_thresh = fixed_thresh
-        y_pred_best = ndf_vals < best_thresh
+        y_pred_best = ndf_vals < fixed_thresh
         best_f1 = f1_score(y_true, y_pred_best, zero_division=0)
         best_acc = np.mean(y_true == y_pred_best)
-        print(f"Using fixed threshold: {best_thresh}")
+        print(f"Using fixed threshold: {fixed_thresh}")
     else:
         thresh_range = np.linspace(np.percentile(ndf_vals, 5), np.percentile(ndf_vals, 95), 100)
         best_f1, best_thresh, best_acc = 0, 0, 0
@@ -213,43 +200,32 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, devic
     print(f"\n{'='*60}")
     print(f"CORRELATION & CLASSIFICATION ANALYSIS (Franka 7-DOF)")
     print(f"{'='*60}")
-    print(f"Points Analyzed:      {n_samples}")
-    print(f"GT Hit Rate:          {hit_rate:.2f}%")
-    print(f"Distance Correlation: {corr_dist:.4f} (on hit points)")
-    print(f"Optimal Threshold:    {best_thresh:.4f}")
-    print(f"Best F1 Score:        {best_f1:.4f}")
-    print(f"Best Accuracy:        {best_acc*100:.2f}%")
-    print(f"FNR (Missed Coll):    {fnr*100:.2f}% ({fn}/{tp+fn})")
-    print(f"  - Missed Gripper Coll: {fn_gripper} ({fn_gripper/max(1, fn)*100:.1f}% of FN)")
-    print(f"  - Missed Arm Coll:     {fn_arm} ({fn_arm/max(1, fn)*100:.1f}% of FN)")
-    if fn_arm > 0:
-        sorted_links = sorted(arm_link_counts.items(), key=lambda x: x[1], reverse=True)
-        print(f"    [Arm Breakdown]: ", end="")
-        for link, count in sorted_links:
-            print(f"{link}({count}) ", end="")
-        print()
-    print(f"FPR (False Alarm):    {fpr*100:.2f}%")
+    print(f"Spearman Correlation:  {corr_dist_spearman:.4f}")
+    print(f"Pearson Correlation:   {corr_dist_pearson:.4f}")
+    print(f"F1 Score:        {best_f1:.4f}")
+    print(f"Accuracy:        {best_acc*100:.2f}%")
+    print(f"FNR:    {fnr*100:.2f}%")
+    # print(f"  - Missed Gripper Coll: {fn_gripper} ({fn_gripper/max(1, fn)*100:.1f}% of FN)")
+    # print(f"  - Missed Arm Coll:     {fn_arm} ({fn_arm/max(1, fn)*100:.1f}% of FN)")
+    # if fn_arm > 0:
+    #     sorted_links = sorted(arm_link_counts.items(), key=lambda x: x[1], reverse=True)
+    #     print(f"    [Arm Breakdown]: ", end="")
+    #     for link, count in sorted_links:
+    #         print(f"{link}({count}) ", end="")
+    #     print()
+    print(f"FPR:    {fpr*100:.2f}%")
     print(f"{'='*60}\n")
     
     os.makedirs(out_dir, exist_ok=True)
     
     sns.set_theme()
-    plt.figure(figsize=(7, 7))
+    plt.figure(figsize=(6, 6))
     
-    if np.any(hit_mask):
-        plt.scatter(approx_dist[hit_mask], ndf_vals[hit_mask], s=12, alpha=0.6, label='Hit (True Distance)')
+    plt.scatter(approx_dist, ndf_vals, s=10, alpha=0.5)
     
-    miss_mask = ~hit_flags
-    if np.any(miss_mask):
-        viz_dist = (1.6 + np.random.rand(np.sum(miss_mask)) * 0.15) * np.where(gt_labels[miss_mask], -1, 1)
-        plt.scatter(viz_dist, ndf_vals[miss_mask], s=8, alpha=0.2, color='gray', label='Miss (Out of Range)')
-    
-    plt.axhline(best_thresh, color='r', linestyle='--', label=f'Optimal Threshold={best_thresh:.3f}')
-    plt.axvline(0, color='k', linestyle='-', alpha=0.3)
-    plt.xlabel("Approximate GT C-Space Distance (rad)")
-    plt.ylabel("NDF Prediction")
-    plt.title(f"NDF Evaluation (Franka 7D)\nHit Rate: {hit_rate:.1f}%, Spearman_hit: {corr_dist:.3f}")
-    plt.legend()
+    plt.xlabel("Boundary-Distance Proxy", fontsize=18)
+    plt.ylabel("NDF Prediction", fontsize=18)
+    plt.title("NDF vs. Boundary-Distance Proxy", fontsize=20)
     plt.tight_layout()
     
     plt.savefig(f"{out_dir}/{args.world}.png", dpi=300)
@@ -258,11 +234,9 @@ def evaluate_franka_correlation(model_path, scene_xml, n_samples, out_dir, devic
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--world", type=str, default="obs30", help = "world name")
-    parser.add_argument("--samples", type=int, default=3000, help = "number of samples")
+    parser.add_argument("--world", type=str, default="obs10", help = "world name")
+    parser.add_argument("--samples", type=int, default=2000, help = "number of samples")
     parser.add_argument("--out", type=str, default="output/correlation", help = "output directory")
-    parser.add_argument("--fixed-thresh", type=float, default=None, help="Use a fixed threshold for classification")
-    parser.add_argument("--exhaustive", action="store_true", help="Search much further to reach 100% Hit Rate")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     args = parser.parse_args()
     
@@ -274,10 +248,4 @@ if __name__ == "__main__":
     sence = "scenes/" + args.world + ".xml"
     model = "output/" + args.world + "/model_final.pt"
 
-    evaluate_franka_correlation(model, sence, args.samples, args.out, device, exhaustive=args.exhaustive)
-
-    save_dir = "output/benchmark"
-
-    summary_path = os.path.join(save_dir, f"summary_{args.world}.json")
-
-    
+    evaluate_franka_correlation(model, sence, args.samples, args.out, device)

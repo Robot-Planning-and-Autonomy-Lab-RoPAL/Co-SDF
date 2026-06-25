@@ -30,7 +30,7 @@ if __name__ == "__main__":
         description="Trains a SIREN-based G-NDF using MSE + Eikonal loss."
     )
     
-    parser.add_argument("--world", type=str, default="obs20", help="name of the world")
+    parser.add_argument("--world", type=str, default="block_world6", help="name of the world")
     parser.add_argument("--n-hidden", type=int, default=256, help="size of the layers")
     parser.add_argument("--n-layers", type=int, default=5, help="number of layers")
     parser.add_argument("--model", type=str, default="gndf_siren", help="model type")

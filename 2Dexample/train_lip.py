@@ -23,13 +23,13 @@ if __name__ == "__main__":
         description="This scripts runs the training optimization of a 1-Lipschitz neural network on some precomputed point cloud dataset."
     )
     
-    parser.add_argument("--world", type=str, default="obs30", help="name of the world")
+    parser.add_argument("--world", type=str, default="block_world1", help="name of the world")
     parser.add_argument("--unsigned", action="store_true", help="flag for training an unsigned distance field instead of a signed one")
     parser.add_argument("--n-hidden", type=int, default=256, help="size of the layers")
     parser.add_argument("--n-layers", type=int, default=10, help="number of layers in the network")
     parser.add_argument("--model", type=str, default="gndf", help="which model to train (SLL or GNDF)")
     
-    parser.add_argument("--epochs", type=int, default=200, help="Number of training epochs")
+    parser.add_argument("--epochs", type=int, default=500, help="Number of training epochs")
     parser.add_argument("--batch-size", type=int, default=200, help="Train batch size")
     parser.add_argument("--test-batch-size", type = int, default = 5000, help="Test batch size")
     parser.add_argument("--learning-rate", type=float, default=5e-4, help="Adam's learning rate")

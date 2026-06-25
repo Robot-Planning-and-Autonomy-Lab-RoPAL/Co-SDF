@@ -50,6 +50,22 @@ def sample_near_boundary_collision(problem, n_target):
     pbar.close()
     return np.array(configs)
 
+def sample_random_collision(problem, n_target):
+    """
+    Find random points that are in collision.
+    """
+    configs = []
+    pbar = tqdm(total=n_target, desc="Random Collision Sampling", ncols=100)
+    
+    while len(configs) < n_target:
+        q = np.random.uniform(0, 2*np.pi, 2)
+        if check_2d_collision(problem, q):
+            configs.append(q)
+            pbar.update(1)
+            
+    pbar.close()
+    return np.array(configs)
+
 def get_device():
     if torch.cuda.is_available():
         return torch.device("cuda")

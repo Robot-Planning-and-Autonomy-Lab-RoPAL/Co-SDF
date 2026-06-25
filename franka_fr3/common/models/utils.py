@@ -14,15 +14,12 @@ def load_model(path, device:str):
     model_type = data.get("id","Spectral")
     if model_type == "SDP":
         model = DenseSDP(*data["meta"])
-    elif model_type in ["G-NDF", "G-NDF-Sparse", "G-NDF-Refined", "G-NDF-7D-Refined", "G-NDF-7D"]:
-        # New format: [n_layers, n_hidden, n_points_per_link]
-        # Legacy format: [n_layers, n_hidden] or with frequencies
+    elif model_type in ["G-NDF", "G-NDF-7D"]:
         meta = data["meta"]
         if len(meta) >= 3:
             n_layers, n_hidden, n_points = meta[:3]
             model = G_NDF(n_layers, n_hidden, n_points, device=device)
         else:
-            # Legacy: [n_layers, n_hidden]
             model = G_NDF(meta[0], meta[1], 2, device=device)
     else:
         raise Exception(f"Model type {model_type} not recognized")

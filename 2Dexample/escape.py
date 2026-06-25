@@ -34,11 +34,14 @@ class GradientEscaper:
             ndf_val = self.model(q_curr.reshape(1, -1)).squeeze()
             ndf_history.append(ndf_val.item())
             
-            if ndf_val.item() >= self.safety_margin:
-                ndf_success = True
-                break
-            
-            loss = torch.nn.functional.relu(self.safety_margin - ndf_val)
+            # Termination: check if we have escaped collision using Ground Truth
+            with torch.no_grad():
+                q_numpy = q_curr.detach().cpu().numpy()
+                if not check_2d_collision(self.problem, q_numpy):
+                    ndf_success = True
+                    break
+
+            loss = torch.nn.functional.relu(-ndf_val)
             loss.backward()
             optimizer.step()
             
@@ -58,10 +61,8 @@ class GradientEscaper:
             
         return {
             "method": "adam_gradient",
-            "ndf_success": ndf_success,
-            "gt_success": gt_success,
-            "gt_steps": (step + 1),
-            "ndf_steps": (step + 1),
+            "success": ndf_success,
+            "steps": (step + 1),
             "trajectory": np.array(trajectory)
         }
 
@@ -81,12 +82,14 @@ class SamplingEscaper:
         
         for step in range(max_steps):
             with torch.no_grad():
-                ndf_curr = self.model(q_curr.reshape(1, -1)).item()
-                ndf_history.append(ndf_curr)
-                
-                if ndf_curr >= self.safety_margin:
+                # Termination: check if we have escaped collision using Ground Truth
+                q_numpy = q_curr.cpu().numpy()
+                if not check_2d_collision(self.problem, q_numpy):
                     ndf_success = True
                     break
+
+                ndf_curr = self.model(q_curr.reshape(1, -1)).item()
+                ndf_history.append(ndf_curr)
                 
                 noise = torch.randn(K, 2, device=self.device) * step_size
                 candidates = (q_curr + noise) % (2 * np.pi)
@@ -102,10 +105,8 @@ class SamplingEscaper:
             
         return {
             "method": "sampling",
-            "ndf_success": ndf_success,
-            "gt_success": gt_success,
-            "gt_steps": (step + 1),
-            "ndf_steps": (step + 1),
+            "success": ndf_success,
+            "steps": (step + 1),
             "trajectory": np.array(trajectory),
             "ndf_history": ndf_history
         }

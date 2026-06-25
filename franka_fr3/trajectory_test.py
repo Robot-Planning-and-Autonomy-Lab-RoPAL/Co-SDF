@@ -4,17 +4,14 @@ import argparse
 import numpy as np
 from rrt import RRT
 from common.utils import get_device
-from ndf_casadi import CasADiPlanner
-from sdf_planner import WorkspaceSDFPlanner
+from trajectory_optim import CasADiPlanner, NLoptPlanner
 from trajectory_verify import TrajectoryEvaluator
 
 def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_iter, device):
-
-    device = get_device()
     device_str = str(device).split(':')[0]
     
     print("="*80)
-    print(f"RRT + GLOBAL TRAJECTORY OPTIMIZATION (GT METRICS)")
+    print(f"RRT + GLOBAL TRAJECTORY OPTIMIZATION (NDF vs SDF)")
     print("="*80)
     
     print("\n[1] Generating RRT path...")
@@ -27,113 +24,133 @@ def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_it
     
     start = rrt_path[0]
     goal = rrt_path[-1]
-    
     rrt_resampled = resample_path(rrt_path, n_waypoints)
     
-    print(f"\n{'='*80}")
-    print("[2] NDF + IPOPT (hard constraints)")
-    print(f"{'='*80}")
+    ndf_planner = CasADiPlanner(model, sence, device=device_str, model_type="G-NDF")
+    evaluator = TrajectoryEvaluator(sence, model=ndf_planner.model, device=device_str)
+    ndf_nlopt_planner = NLoptPlanner(model, sence, device=device_str, opt_base=ndf_planner)
     
-    ndf_planner = CasADiPlanner(model, sence, device=device_str)
+    nnsdf_weight = "models/fr3_nnsdf/fr3_nnsdf_full.pt"
+    nnsdf_planner = CasADiPlanner(nnsdf_weight, sence, device=device_str, model_type="NN-SDF")
     
-    evaluator = TrajectoryEvaluator(sence, model=ndf_planner.opt_base.model, device=device_str)
-    rrt_metrics = evaluator.evaluate(rrt_path)
+    # Sample points for NNSDF Environment (Standard RDF Volumetric Grid)
+    if hasattr(nnsdf_planner, 'env_sampler'):
+        obs_pts = nnsdf_planner.env_sampler.sample_points(method='grid', num_per_dim=5)
+        nnsdf_planner.model.set_obs_points(obs_pts)
+        
+    nnsdf_nlopt_planner = NLoptPlanner(model, sence, device=device_str, opt_base=nnsdf_planner)
     
-    print(f"\n[RRT Initial Path]")
-    print(f"  Points: {len(rrt_path)}")
-    print(f"  Length: {rrt_metrics['path_length']:.4f}")
-    print(f"  Clearance: {rrt_metrics['min_clearance']:.4f}")
-    print(f"  Safe: {rrt_metrics['success']}")
+    planner_map = {
+        "ndf": (ndf_planner, ndf_nlopt_planner),
+        "sdf": (nnsdf_planner, nnsdf_nlopt_planner)
+    }
     
-    ok_ndf, path_ndf, t_ndf, meta_ndf = ndf_planner.solve(
-        start, goal,
-        initial_path=rrt_resampled,
-        formulation='hard',
-        solver=solver,
-        n_waypoints=n_waypoints,
-        verbose=False,
-        safety_margin=safety_margin,
-        max_iter=max_iter
-    )
-    
-    metrics_ndf = evaluator.evaluate(path_ndf)
-    
-    print(f"\n[NDF Result]")
-    print(f"  Safe: {metrics_ndf['success']}")
-    print(f"  Length: {metrics_ndf['path_length']:.4f}")
-    print(f"  Clearance: {metrics_ndf['min_clearance']:.4f}")
-    print(f"  Time: {t_ndf:.2f}s")
-    
-    print(f"\n{'='*80}")
-    print("[3] Workspace SDF + IPOPT (hard constraints)")
-    print(f"{'='*80}")
-    
-    ws_planner = WorkspaceSDFPlanner(sence, grid_resolution=64, device=device_str)
-    
-    ok_ws, path_ws, t_ws, meta_ws = ws_planner.solve(
-        start, goal,
-        initial_path=rrt_resampled,
-        solver=solver,
-        n_waypoints=n_waypoints,
-        verbose=False,
-        safety_margin=safety_margin,
-        max_iter=max_iter
-    )
-
-    print("ndf==sdf object?", path_ndf is path_ws)
-    print("ndf==sdf values?", np.allclose(path_ndf, path_ws))
-    print("ndf move from init:", np.linalg.norm(path_ndf - rrt_resampled))
-    print("sdf move from init:", np.linalg.norm(path_ws  - rrt_resampled))
-    
-    metrics_ws = evaluator.evaluate(path_ws)
-    
-    print(f"\n[Workspace SDF Result]")
-    print(f"  Safe: {metrics_ws['success']}")
-    print(f"  Length: {metrics_ws['path_length']:.4f}")
-    print(f"  Clearance: {metrics_ws['min_clearance']:.4f}")
-    print(f"  Time: {t_ws:.2f}s")
-    
-    print(f"\n{'='*80}")
-    print("SUMMARY COMPARISON (ALL METRICS ARE GT)")
-    print(f"{'='*80}")
-    print(f"{'Method':<20} | {'Safe':<8} | {'Length':<12} | {'Clr (GT)':<10} | {'Time':<8}")
-    print(f"{'-'*80}")
-    print(f"{'RRT (initial)':<20} | {str(rrt_metrics['success']):<8} | {rrt_metrics['path_length']:<12.4f} | {rrt_metrics['min_clearance']:<10.4f} | {'--':<8}")
-    print(f"{'NDF':<20} | {str(metrics_ndf['success']):<8} | {metrics_ndf['path_length']:<12.4f} | {metrics_ndf['min_clearance']:<10.4f} | {t_ndf:<8.2f}s")
-    print(f"{'Workspace SDF':<20} | {str(metrics_ws['success']):<8} | {metrics_ws['path_length']:<12.4f} | {metrics_ws['min_clearance']:<10.4f} | {t_ws:<8.2f}s")
-    print(f"{'='*80}\n")
-    
-    save_dir = "output/traj"
+    results = []
+    save_dir = "output/traj_compare/" + args.world
     os.makedirs(save_dir, exist_ok=True)
-    
     np.save(f"{save_dir}/rrt.npy", rrt_path)
-    np.save(f"{save_dir}/ndf.npy", path_ndf)
-    np.save(f"{save_dir}/sdf.npy", path_ws)
-    
-    print(f"Trajectories saved to {save_dir}/:")
-    print(f"  - rrt.npy")
-    print(f"  - ndf.npy")
-    print(f"  - sdf.npy")
 
+    # -------------------------------------------------------------------------
+    # [2] Baselines
+    # -------------------------------------------------------------------------
+    rrt_metrics = evaluator.evaluate(rrt_path)
+    res_metrics = evaluator.evaluate(rrt_resampled)
+    
+    results.append({
+        "name": "RRT (initial)",
+        "safe": rrt_metrics['success'], 
+        "len": rrt_metrics['path_length'],
+        "sm": rrt_metrics['smoothness'],
+        "sm95": rrt_metrics['smoothness_p95'],
+        "f": 0.0,
+        "time": 0.0
+        })
+
+    results.append({
+        "name": "RRT (resampled)",
+        "safe": res_metrics['success'], 
+        "len": res_metrics['path_length'],
+        "sm": res_metrics['smoothness'],
+        "sm95": res_metrics['smoothness_p95'],
+        "f": 0.0,
+        "time": 0.0
+        })
+
+    # -------------------------------------------------------------------------
+    # [3] Run Optimization Cases
+    # -------------------------------------------------------------------------
+    for m_name in ["ndf", "sdf"]:
+        p_casadi, p_nlopt = planner_map[m_name]
+        full_name = f"{m_name.upper()} ({solver})"
+        print(f"\nRunning {full_name}...")
+        import torch
+        torch.cuda.empty_cache()
+        
+        # Dispatch to correct planner implementation
+        if solver.lower() in ['slsqp', 'cobyla']:
+            ok, path_opt, t, meta = p_nlopt.solve(
+                start, goal,
+                initial_path=rrt_resampled,
+                solver=solver,
+                n_waypoints=n_waypoints,
+                verbose=True,
+                safety_margin=safety_margin,
+                max_iter=max_iter
+            )
+        else:
+            ok, path_opt, t, meta = p_casadi.solve(
+                start, goal,
+                initial_path=rrt_resampled,
+                solver=solver,
+                n_waypoints=n_waypoints,
+                verbose=True,
+                safety_margin=safety_margin,
+                max_iter=max_iter
+            )
+        
+        metrics = evaluator.evaluate(path_opt)
+        results.append({
+            "name": m_name.upper(), 
+            "safe": metrics['success'],
+            "len": metrics['path_length'], 
+            "sm": metrics['smoothness'], 
+            "sm95": metrics['smoothness_p95'],
+            "time": t
+        })
+        
+        # Save optimized path
+        save_path = f"{save_dir}/{m_name}.npy"
+        np.save(save_path, path_opt)
+        print(f"  Safe: {metrics['success']} | Time: {t:.2f}s | Saved to {save_path}")
+    
+    print(f"\n{'='*100}")
+    print("SUMMARY COMPARISON (GROUND TRUTH METRICS)")
+    print(f"{'='*100}")
+    print(f"{'Method-Solver':<20} | {'Safe':<6} | {'Length':<9} | {'Sm_mean':<9} | {'Sm_p95':<9} | {'Time':<8}")
+    print(f"{'-'*100}")
+    for res in results:
+        safe_str = "YES" if res['safe'] else "NO"
+        print(f"{res['name']:<20} | {safe_str:<6} | {res['len']:<9.4f} | {res['sm']:<9.2f} | {res['sm95']:<9.2f} | {res['time']:<8.2f}s")
+    print(f"{'='*100}\n")
+    
+    save_dir = "output/traj_compare/" + args.world
+    os.makedirs(save_dir, exist_ok=True)
+    np.save(f"{save_dir}/rrt.npy", rrt_path)
 
 def resample_path(path, n_points):
     diffs = np.linalg.norm(path[1:] - path[:-1], axis=1)
     cum_dist = np.concatenate(([0], np.cumsum(diffs)))
     total_dist = cum_dist[-1]
-     
     target_dist = np.linspace(0, total_dist, n_points)
-    
     new_path = np.zeros((n_points, path.shape[1]))
     for i in range(path.shape[1]):
         new_path[:, i] = np.interp(target_dist, cum_dist, path[:, i])
-    
     return new_path
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--world", type=str, default="obs20", help="Scene name")
-    parser.add_argument("--solver", type=str, choices=['ipopt', 'osqp', 'qpoases'], default="ipopt", help="Solver type")
+    parser.add_argument("--solver", type=str, choices=['slsqp', 'ipopt'], default="ipopt", help="Solver to test")
     parser.add_argument("--n_waypoints", type=int, default=30, help="Number of waypoints")
     parser.add_argument("--safety_margin", type=float, default=0.02, help="Safety margin")
     parser.add_argument("--max_iter", type=int, default=200, help="Max iterations per solve")
@@ -141,7 +158,6 @@ if __name__ == "__main__":
 
     sence = "scenes/" + args.world + ".xml"
     model = "output/" + args.world + "/model_final.pt"
-
     device = get_device()
     print("Using device: ", device)
 
