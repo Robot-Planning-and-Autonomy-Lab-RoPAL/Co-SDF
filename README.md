@@ -1,16 +1,8 @@
-# Neural-Distance-Fields-for-Configuration-Space-Shape-Modeling
+# Co-SDF: Learning Signed-Distance-Correlated Neural Fields in Configuration Space Without Distance Supervision
 
-This repository provides tools for modeling Configuration Space (C-space) shapes using 1-Lipschitz Neural Distance Fields (NDFs). It supports 2D arms, 3-DOF Jaco arms, and 7-DOF Franka FR3 arms, featuring advanced training techniques, robust NDF-based trajectory optimization, and standardized benchmarking.
-
-## Key Features
-
-- **Multi-scale Periodic Embedding**: Handles joint angle periodicity and captures high-frequency C-space boundary details.
-- **Eikonal Regularization & 1-Lipschitz**: Enforces unit gradient length for accurate and physically consistent distance fields using Sandwiched Linear Layers (SLL).
-- **Intensive Refined Benchmarking**: Unified evaluation standard for 2D and 7-DOF platforms, focusing on boundary-based sampling, "escape" performance, and trajectory success rates.
-- **Advanced 7-DOF Pipeline**: Includes segment-level collision interpolation, XOR self-collision logic, and hard joint bound constraints.
-- **Paper-Ready Visualizations**: High-quality, publication-standard plots with consistent color schemes and geometric robot representations.
-
----
+We propose Co-SDF, a correlated signed distance neural representation defined directly in C-space. 
+The model learns a continuous scalar field over joint configurations from binary collision labels without requiring explicit supervision of true C-space signed distance-to-collision. 
+Each configuration is mapped to control-point embeddings via forward kinematics, and a 1-Lipschitz neural architecture trained with hinge Kantorovich–Rubinstein (hKR) and Eikonal regularization promotes smooth and distance-consistent behavior.
 
 ## Installation
 
