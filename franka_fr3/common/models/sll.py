@@ -2,10 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from deel import torchlip
 
 def safe_inv(x):
-    # Functional version (no in-place mutation) for L4CasADi compatibility
     return torch.where(x != 0, x ** (-1), torch.zeros_like(x))
 
 class SDPBasedLipschitzDense(nn.Module):
@@ -23,7 +21,7 @@ class SDPBasedLipschitzDense(nn.Module):
         nn.init.xavier_normal_(self.weight)
         fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
         bound = 1 / np.sqrt(fan_in)
-        nn.init.uniform_(self.bias, -bound, bound)  # bias init
+        nn.init.uniform_(self.bias, -bound, bound)
 
     def compute_t(self):
         q = torch.exp(self.q)
@@ -40,21 +38,3 @@ class SDPBasedLipschitzDense(nn.Module):
         res = 2 * F.linear(res, self.weight.T)
         out = x - res
         return out
-    
-def DenseSDP(dim_in, dim_hidden, n_layers):
-    class RobustPad(nn.Module):
-        def __init__(self, target):
-            super().__init__()
-            self.target = target
-        def forward(self, x):
-            if x.shape[1] >= self.target: return x
-            return F.pad(x, (0, self.target - x.shape[1]))
-            
-    layers = [RobustPad(dim_hidden)]
-    for _ in range(n_layers):
-        layers.append(SDPBasedLipschitzDense(dim_hidden))
-    layers.append(torchlip.FrobeniusLinear(dim_hidden,1))
-    model = torch.nn.Sequential(*layers)
-    model.id = "SDP"
-    model.meta = [dim_in, dim_hidden, n_layers]
-    return model

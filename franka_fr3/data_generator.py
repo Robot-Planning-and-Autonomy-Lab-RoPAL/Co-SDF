@@ -11,12 +11,10 @@ from utils import ControlPoint
 from common.utils import get_device
 
 _GLOBAL_ENV = None
-_CP_MANAGER = None
 
 def _init_oracle(model_path):
-    global _GLOBAL_ENV, _CP_MANAGER
+    global _GLOBAL_ENV
     _GLOBAL_ENV = FR3Env(model_path=model_path)
-    _CP_MANAGER = ControlPoint(device="cpu", n_points_per_link=1)
 
 class FR3Env:
     def __init__(self, model_path):
@@ -62,15 +60,13 @@ def _oracle_worker(q):
 class DataGenerator:
     def __init__(self, model_path, bounds, device, n_workers=None):
         self.model_path = model_path
-        self.bounds = np.array(bounds)
         self.dim = len(bounds)
         self.lo = np.array([b[0] for b in bounds], dtype=float)
         self.hi = np.array([b[1] for b in bounds], dtype=float)
         self.span = self.hi - self.lo
         self.n_workers = n_workers or (os.cpu_count() or 4)
         self.device = device
-        self.n_points_per_link = 1
-        self.cp_manager = ControlPoint(device=self.device, n_points_per_link=self.n_points_per_link)
+        self.cp_manager = ControlPoint(device=self.device)
         
         q_test = torch.tensor(self.lo + np.random.rand(2000, self.dim) * self.span).float().to(self.device)
         dets_test = self.cp_manager.get_jacobian_determinant(q_test)
@@ -93,10 +89,6 @@ class DataGenerator:
                 cnt += n_keep
         return np.vstack(valid_q)
 
-    def _sample_uniform(self, m):
-        if m <= 0: return np.zeros((0, self.dim))
-        return self.lo + np.random.rand(m, self.dim) * self.span
-    
     def _parallel_label(self, points, desc, pool):
         if len(points) == 0: return np.array([], dtype=int)
         it = pool.imap(_oracle_worker, points, chunksize=1024)
@@ -105,7 +97,9 @@ class DataGenerator:
     
     def _sample_boundary_points(self, n_target, sigma, pool):
         X_in_all, X_out_all = [], []
-        if n_target <= 0: return np.array(X_in_all), np.array(X_out_all)
+        if n_target <= 0:
+            empty = np.zeros((0, self.dim))
+            return empty, empty.copy()
         
         pbar = tqdm(total=n_target, desc="Found Boundary Pts", ncols=80)
         
@@ -180,8 +174,7 @@ class DataGenerator:
             frac = n_pts / (len(X_in) + len(X_out))
             X_in = X_in[:int(len(X_in)*frac)]; X_out = X_out[:int(len(X_out)*frac)]
         
-        Q_in, Q_out = X_in.copy(), X_out.copy()
-        return self._augment_with_xyz(X_in), self._augment_with_xyz(X_out), Q_in, Q_out
+        return self._augment_with_xyz(X_in), self._augment_with_xyz(X_out), X_in, X_out
 
     def _augment_with_xyz(self, q_np):
         if len(q_np) == 0: return np.zeros((0, 27))

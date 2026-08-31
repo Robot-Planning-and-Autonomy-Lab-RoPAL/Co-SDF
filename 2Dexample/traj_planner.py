@@ -3,11 +3,13 @@ import os
 import argparse
 import numpy as np
 import torch
-import time
+import robot_tools
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 from rrt import RRT
 from common.utils import get_device
-from ndf_casadi import CasADiPlanner, NLoptPlanner
-from trajectory_verify import TrajectoryEvaluator
+from traj_solver import CasADiPlanner, NLoptPlanner
+from traj_verify import TrajectoryEvaluator
 
 def resample_path(path, n_points):
     path = np.asarray(path)
@@ -24,38 +26,68 @@ def resample_path(path, n_points):
         new_path[:, i] = np.interp(target_dist, cum_dist, path[:, i])
     return new_path
 
+
+def plot_trajectories(problem, rrt_path, ndf_path, start, goal):
+    theta, c_space = problem.construct_config_space(201)
+    extent = [theta[0][0], theta[0][-1], theta[1][0], theta[1][-1]]
+    ticks = [0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi]
+    tick_labels = [r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$']
+    y_tick_labels = ['', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$']
+    paths = [rrt_path, ndf_path]
+    titles = ['RRT', 'NDF']
+    obstacle_cmap = ListedColormap(['#f2f0eb', '#6fa4c7'])
+
+    _, axes = plt.subplots(1, 2, figsize=(10, 5), constrained_layout=True)
+    for ax, path, title in zip(axes, paths, titles):
+        path = np.asarray(path)
+        ax.imshow(
+            np.asarray(c_space).T,
+            origin='lower',
+            extent=extent,
+            cmap=obstacle_cmap,
+            interpolation='nearest',
+            vmin=0,
+            vmax=1,
+        )
+        ax.plot(path[:, 0], path[:, 1], '--', color='#e32620', linewidth=2)
+        ax.plot(start[0], start[1], 'ko', markersize=7)
+        ax.plot(goal[0], goal[1], 'k*', markersize=12)
+        ax.set_title(title, fontsize=20)
+        ax.set_xlabel(r'$\theta_1$', fontsize=20)
+        ax.set_ylabel(r'$\theta_2$', fontsize=20)
+        ax.set_xlim(0, 2 * np.pi)
+        ax.set_ylim(0, 2 * np.pi)
+        ax.set_xticks(ticks, tick_labels)
+        ax.set_yticks(ticks, y_tick_labels)
+        ax.tick_params(axis='both', labelsize=17)
+        ax.set_aspect('equal')
+
+    plt.show()
+
 def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_iter, device):
+
     device_str = str(device).split(':')[0]
-
-    print("=" * 80)
-    print("RRT + NDF TRAJECTORY OPTIMIZATION (2D)")
-    print("=" * 80)
-
-    # ----- [1] RRT -----
-    print("\n[1] Generating RRT path...")
-    import robot_tools
     problem = robot_tools.PlanningProblem(sence)
     rrt_planner = RRT(problem)
     
-    # Try multiple random start/goal pairs until one is free
-    start, goal = None, None
+    start, goal, rrt_path = None, None, None
     for _ in range(500):
         q_s = np.random.uniform(0, 2*np.pi, size=2)
         q_g = np.random.uniform(0, 2*np.pi, size=2)
-        if rrt_planner.is_collision_free(q_s) and rrt_planner.is_collision_free(q_g):
+        if not (rrt_planner.is_collision_free(q_s) and rrt_planner.is_collision_free(q_g)):
+            continue
+
+        candidate_path = RRT(problem).plan(q_s, q_g)
+        if candidate_path is not None:
             start, goal = q_s, q_g
+            rrt_path = candidate_path
             break
             
-    if start is None:
-        print("Failed to find valid start/goal!")
-        return
-
-    print(f"  -> Start: {start.round(3)}, Goal: {goal.round(3)}")
-    rrt_path = rrt_planner.plan(start, goal)
-
     if rrt_path is None:
-        print("RRT failed!")
+        print("Failed to find a start/goal problem with an exact RRT solution!")
         return
+
+    print(f"Start: {start.round(3)}, Goal: {goal.round(3)}")
 
     rrt_path = np.array(rrt_path)
     rrt_resampled = resample_path(rrt_path, n_waypoints)
@@ -64,12 +96,10 @@ def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_it
     os.makedirs(save_dir, exist_ok=True)
     np.save(f"{save_dir}/rrt.npy", rrt_path)
 
-    # ----- [2] Build NDF planner + evaluator -----
     ndf_planner = CasADiPlanner(model, sence, device=device_str)
     evaluator = TrajectoryEvaluator(sence, device=device_str)
     ndf_nlopt_planner = NLoptPlanner(model, sence, device=device_str, opt_base=ndf_planner)
 
-    # ----- [3] Baselines -----
     results = []
 
     rrt_metrics = evaluator.evaluate(rrt_path)
@@ -92,27 +122,25 @@ def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_it
         "time": 0.0,
     })
 
-    # ----- [4] NDF Optimization -----
-    print(f"\n[2] Running NDF ({solver.upper()})...")
     torch.cuda.empty_cache()
 
-    if solver.lower() in ['slsqp', 'cobyla']:
-        ok, path_opt, t, meta = ndf_nlopt_planner.solve(
+    if solver.lower() == 'slsqp':
+        _, path_opt, t, _ = ndf_nlopt_planner.solve(
             start, goal,
             initial_path=rrt_resampled,
             solver=solver,
             n_waypoints=n_waypoints,
-            verbose=True,
+            verbose=False,
             safety_margin=safety_margin,
             max_iter=max_iter,
         )
     else:
-        ok, path_opt, t, meta = ndf_planner.solve(
+        _, path_opt, t, _ = ndf_planner.solve(
             start, goal,
             initial_path=rrt_resampled,
             solver=solver,
             n_waypoints=n_waypoints,
-            verbose=True,
+            verbose=False,
             safety_margin=safety_margin,
             max_iter=max_iter,
         )
@@ -129,9 +157,7 @@ def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_it
 
     ndf_save = f"{save_dir}/ndf.npy"
     np.save(ndf_save, path_opt)
-    print(f"  Safe: {ndf_metrics['success']} | Time: {t:.2f}s | Saved to {ndf_save}")
 
-    # ----- [5] Summary -----
     print(f"\n{'=' * 100}")
     print("SUMMARY COMPARISON (GROUND TRUTH METRICS)")
     print(f"{'=' * 100}")
@@ -142,10 +168,18 @@ def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_it
         print(f"{res['name']:<25} | {safe_str:<6} | {res['len']:<9.4f} | {res['sm']:<9.2f} | {res['sm95']:<9.2f} | {res['time']:<8.2f}s")
     print(f"{'=' * 100}\n")
 
+    plot_trajectories(
+        problem,
+        rrt_path,
+        path_opt,
+        start,
+        goal,
+    )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--world", type=str, default="block_world6", help="Scene name")
+    parser.add_argument("--world", type=str, default="block_world1", help="Scene name")
     parser.add_argument("--solver", type=str, choices=['slsqp', 'ipopt'], default="ipopt")
     parser.add_argument("--n_waypoints", type=int, default=30)
     parser.add_argument("--safety_margin", type=float, default=0.02)
@@ -155,7 +189,6 @@ if __name__ == "__main__":
     sence = "config/" + args.world + ".yaml"
     model = "output/" + args.world + "/model_final.pt"
     device = get_device()
-    print("Using device:", device)
 
     global_optimization(
         sence=sence,

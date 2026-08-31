@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-import argparse
 import numpy as np
 import mujoco
 from ompl import base as ob
 from ompl import geometric as og
 import os
-import sys
 
 def check_franka_collision(mj_model, mj_data, q, is_robot_body):
     mj_data.qpos[:7] = q
@@ -61,7 +59,6 @@ class RRTConnect:
         return not check_franka_collision(self.mj_model, self.mj_data, q, self.is_robot_body)
 
     def plan(self, start_q, goal_q, output_file=None, timeout=10.0, n_waypoints=100):
-        # Convert to OMPL states
         start_state = ob.State(self.space)
         for i in range(self.dim): start_state[i] = float(start_q[i])
         
@@ -80,7 +77,6 @@ class RRTConnect:
         if solved:
             print("Found exact solution!")
             path = self.ss.getSolutionPath()
-            # Smooth/Interpolate to requested waypoints
             path.interpolate(n_waypoints)
             
             n_states = path.getStateCount()
@@ -92,7 +88,6 @@ class RRTConnect:
             
             if output_file:
                 np.save(output_file, path_np)
-                print(f"Path saved to {output_file} with {n_states} waypoints.")
             return path_np
         else:
             print("No RRT-Connect solution found.")

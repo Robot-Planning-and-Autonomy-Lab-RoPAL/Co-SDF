@@ -1,7 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
 
-import mouette as M
 from tqdm import tqdm
 import numpy as np
 
@@ -12,23 +11,6 @@ def get_device():
         return torch.device("mps")
     return torch.device("cpu")
     
-def get_BB(X, dim, pad=0.):
-    """Get the axis-aligned bounding box of points in tensor X
-
-    Args:
-        X (torch.Tensor): input tensor.
-        dim (int): whether points are in 2 or 3 dimensions. Ignore other values.
-
-    Returns:
-        BoundingBox
-    """
-    vmin = torch.min(X, dim=0)[0].cpu()
-    vmax = torch.max(X, dim=0)[0].cpu()
-    bb = M.geometry.AABB(vmin.numpy(), vmax.numpy())
-    bb.pad(pad)
-    return bb
-
-
 def forward_in_batches(model, inputs : np.ndarray, device:str, compute_grad:bool=False, batch_size=5_000):
     inputs = torch.Tensor(inputs).to(device)
     inputs = DataLoader(inputs, batch_size=batch_size)

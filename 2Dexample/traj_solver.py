@@ -4,15 +4,55 @@ import numpy as np
 import torch
 import l4casadi as l4c
 import time
-import os
 import nlopt
-from typing import Optional, Dict
-from trajectory_optim import NDFOptimizer2D
+import robot_tools
+import warnings
+import os
+import sys
+from contextlib import contextmanager
+from common.models import load_model
+
+
+@contextmanager
+def silence_stdout():
+    sys.stdout.flush()
+    saved_stdout = os.dup(1)
+    try:
+        with open(os.devnull, 'w') as sink:
+            os.dup2(sink.fileno(), 1)
+            yield
+    finally:
+        sys.stdout.flush()
+        os.dup2(saved_stdout, 1)
+        os.close(saved_stdout)
+
+
+class NDFOptimizer2D:
+    def __init__(self, model_path, world_file, device):
+        self.device = device
+        self.nq = 2
+        self.model = load_model(model_path, device)
+        self.model.eval()
+        self.problem = robot_tools.PlanningProblem(world_file)
+        self.lower = self.problem.robot.joint_limits[:, 0]
+        self.upper = self.problem.robot.joint_limits[:, 1]
+
+    def resample_path(self, path, num_waypoints):
+        path = np.asarray(path)
+        if len(path) == num_waypoints:
+            return path
+
+        old_indices = np.arange(len(path))
+        new_indices = np.linspace(0, len(path) - 1, num_waypoints)
+        resampled = np.zeros((num_waypoints, self.nq))
+        for j in range(self.nq):
+            resampled[:, j] = np.interp(new_indices, old_indices, path[:, j])
+        return resampled
 
 class NLoptPlanner:
     def __init__(self, model, scene_xml, device="cpu", opt_base=None):
         if opt_base is not None:
-            self.opt_base = opt_base.opt_base # NDFOptimizer2D
+            self.opt_base = opt_base.opt_base
             self.model = self.opt_base.model
         else:
             raise ValueError("opt_base (CasADiPlanner instance) must be provided")
@@ -22,7 +62,7 @@ class NLoptPlanner:
         self.lower = self.opt_base.lower
         self.upper = self.opt_base.upper
 
-    def solve(self, start, goal, solver='LD_SLSQP',
+    def solve(self, start, goal, solver='slsqp',
               initial_path=None, safety_margin=0.02, verbose=False,
               v_max=1.5, a_max=3.0, dt=0.1,
               n_waypoints=30, max_iter=50, w_clr=1.0):
@@ -37,16 +77,9 @@ class NLoptPlanner:
             initial_path = self.opt_base.resample_path(initial_path, n)
         x_init = initial_path.astype(np.float64).flatten()
 
-        solver_map = {"slsqp": "LD_SLSQP", "cobyla": "LN_COBYLA"}
-        algo_name = solver_map.get(solver.lower(), solver.upper())
-        try:
-            algo = getattr(nlopt, algo_name)
-        except AttributeError:
-            algo = nlopt.LD_SLSQP
-
-        opt = nlopt.opt(algo, n_vars)
-        if "LN_" in algo_name or "GN_" in algo_name:
-             opt.set_initial_step(1e-2)
+        if solver.lower() not in ("slsqp", "ld_slsqp"):
+            raise ValueError("NLoptPlanner only supports SLSQP")
+        opt = nlopt.opt(nlopt.LD_SLSQP, n_vars)
 
         opt.set_lower_bounds(np.tile(self.lower, n).astype(np.float64))
         opt.set_upper_bounds(np.tile(self.upper, n).astype(np.float64))
@@ -101,6 +134,10 @@ class NLoptPlanner:
 
         opt.set_min_objective(objective)
 
+        compute_everything(x_init)
+        init_dist_min = cache["dists"].min()
+        c_tol = 1e-2 if init_dist_min < safety_margin else 1e-4
+
         def constraint_start(result, x, grad):
             result[:] = x[:dof] - start
             if grad.size > 0:
@@ -126,29 +163,59 @@ class NLoptPlanner:
                     jac[i, i*dof : (i+1)*dof] = g[i]
                 grad[:] = jac
 
-        opt.add_inequality_mconstraint(constraint_collision, np.full(n, 1e-4))
+        opt.add_inequality_mconstraint(constraint_collision, np.full(n, c_tol))
 
-        # Kinematic constraints
         v_bound = v_max * dt
-        a_bound = a_max * dt**2
-        
-        def constraint_kinematics(result, x, grad):
+        n_vel = 2 * (n - 1) * dof
+        J_vel = np.zeros((n_vel, n_vars))
+        for i in range(n - 1):
+            for j in range(dof):
+                row_u = i * dof + j
+                row_l = (n - 1) * dof + i * dof + j
+                J_vel[row_u, (i + 1) * dof + j] = 1.0
+                J_vel[row_u, i * dof + j] = -1.0
+                J_vel[row_l, (i + 1) * dof + j] = -1.0
+                J_vel[row_l, i * dof + j] = 1.0
+
+        def constraint_velocity(result, x, grad):
             Q = x.reshape(n, dof)
             diff1 = Q[1:] - Q[:-1]
-            diff2 = Q[2:] + Q[:-2] - 2 * Q[1:-1]
-            
-            res_v = np.concatenate([(diff1 - v_bound).flatten(), (-diff1 - v_bound).flatten()])
-            res_a = np.concatenate([(diff2 - a_bound).flatten(), (-diff2 - a_bound).flatten()])
-            result[:] = np.concatenate([res_v, res_a])
-
+            result[: (n - 1) * dof] = (diff1 - v_bound).flatten()
+            result[(n - 1) * dof:] = (-diff1 - v_bound).flatten()
             if grad.size > 0:
-                grad[:] = 0.0 # Numerical or analytic grad needed for LD solvers
-                # For brevity in this 2D port, we'll omit full analytical kin grad matrix 
-                # but standard practice is to use LN_ solvers if grad not provided for constraints
+                grad[:] = J_vel
 
-        # Adding velocity/accel constraints if needed (omitted for pure LD simplicity unless requested)
+        opt.add_inequality_mconstraint(
+            constraint_velocity, np.full(n_vel, 1e-4)
+        )
 
-        opt.set_ftol_rel(1e-4)
+        a_bound = a_max * dt**2
+        n_acc = 2 * (n - 2) * dof
+        J_acc = np.zeros((n_acc, n_vars))
+        for i in range(n - 2):
+            for j in range(dof):
+                row_u = i * dof + j
+                row_l = (n - 2) * dof + i * dof + j
+                J_acc[row_u, (i + 2) * dof + j] = 1.0
+                J_acc[row_u, i * dof + j] = 1.0
+                J_acc[row_u, (i + 1) * dof + j] = -2.0
+                J_acc[row_l, (i + 2) * dof + j] = -1.0
+                J_acc[row_l, i * dof + j] = -1.0
+                J_acc[row_l, (i + 1) * dof + j] = 2.0
+
+        def constraint_acceleration(result, x, grad):
+            Q = x.reshape(n, dof)
+            diff2 = Q[2:] + Q[:-2] - 2 * Q[1:-1]
+            result[: (n - 2) * dof] = (diff2 - a_bound).flatten()
+            result[(n - 2) * dof:] = (-diff2 - a_bound).flatten()
+            if grad.size > 0:
+                grad[:] = J_acc
+
+        opt.add_inequality_mconstraint(
+            constraint_acceleration, np.full(n_acc, 1e-4)
+        )
+
+        opt.set_ftol_rel(1e-1)
         opt.set_maxeval(max_iter)
 
         t0 = time.time()
@@ -156,6 +223,10 @@ class NLoptPlanner:
             x_opt = opt.optimize(x_init)
             status = opt.last_optimize_result()
             success = (status > 0)
+        except nlopt.RoundoffLimited:
+            x_opt = best["x"]
+            status = "RoundoffLimited"
+            success = True
         except Exception as e:
             if verbose: print(f"NLopt failed: {e}")
             return False, initial_path.reshape(n, dof), time.time() - t0, {"status": str(e)}
@@ -163,7 +234,7 @@ class NLoptPlanner:
         return success, x_opt.reshape(n, dof), time.time() - t0, {"status": status}
 
 class CasADiPlanner:
-    def __init__(self, model_path, scene_xml, n_waypoints=30, device="cuda", model_type="G-NDF"):
+    def __init__(self, model_path, scene_xml, n_waypoints=30, device="cuda", model_type="COSDF"):
         self.device = device
         self.default_n = n_waypoints
         self.model_type = model_type
@@ -178,15 +249,22 @@ class CasADiPlanner:
 
     def get_l4c_model(self, n):
         if n not in self.l4c_models:
-            model = l4c.L4CasADi(
-                self.model, 
-                device=self.device, 
-                batched=True, 
-                name=f'ndf_planner_{n}',
-                generate_jac=True
-            )
-            dummy_q = ca.MX.sym('dummy_q', n, self.dof)
-            _ = model(dummy_q)
+            with silence_stdout():
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="The TorchScript type system doesn't support instance-level annotations.*",
+                        category=UserWarning,
+                    )
+                    model = l4c.L4CasADi(
+                        self.model,
+                        device=self.device,
+                        batched=True,
+                        name=f'ndf_planner_{n}',
+                        generate_jac=True,
+                    )
+                    dummy_q = ca.MX.sym('dummy_q', n, self.dof)
+                    _ = model(dummy_q)
             self.l4c_models[n] = model
         return self.l4c_models[n]
 
@@ -255,7 +333,10 @@ class CasADiPlanner:
                 q_opt = opti.debug.value(Q)
                 success = True
             else:
-                q_opt = opti.debug.value(Q)
+                try:
+                    q_opt = opti.debug.value(Q)
+                except Exception:
+                    q_opt = initial_path
                 success = False
             
         return success, q_opt, time.time() - t0, {"status": status}

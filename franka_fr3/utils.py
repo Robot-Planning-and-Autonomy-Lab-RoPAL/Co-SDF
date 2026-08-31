@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
-import os
-import sys
 import torch
-import numpy as np
-import torch.nn as nn
 
 class ForwardKinematics(torch.nn.Module):
 
     def __init__(self, device):
         super().__init__()
-        self.device = device
-
         self.offsets = [
             (0, 0, 0.333, 1, 0, 0, 0),
             (0, 0, 0, 0.7071, -0.7071, 0, 0),
@@ -83,20 +77,20 @@ class ForwardKinematics(torch.nn.Module):
         return tf.vmap(single_fk)(q)
 
 class ControlPoint:
-    def __init__(self, device="cuda", n_points_per_link=1):
+    def __init__(self, device="cuda"):
         self.fk = ForwardKinematics(device=device)
-        self.device = device
-        self.n_points_per_link = 1
         self.local_points = []
         
         lengths = [0.166, -0.158, 0.041, 0.192, 0.192, 0.044, 0.053]
         axes = [2, 1, 0, 1, 1, 0, 2]
-        for l, a in zip(lengths, axes):
-            p = torch.zeros(1, 3, device=device); p[0, a] = l 
+        for length, axis in zip(lengths, axes):
+            p = torch.zeros(1, 3, device=device)
+            p[0, axis] = length
             self.local_points.append(p)
             
         for _ in range(2):
-            p = torch.zeros(1, 3, device=device); p[0, 2] = 0.0225 
+            p = torch.zeros(1, 3, device=device)
+            p[0, 2] = 0.0225
             self.local_points.append(p)
             
         self.seg_indices = [0, 1, 2, 3, 4, 5, 6, 8, 9]
@@ -108,7 +102,9 @@ class ControlPoint:
             all_pts = []
             for i, seg_idx in enumerate(self.seg_indices):
                 lp = self.local_points[i]
-                T = transforms[seg_idx]; R = T[:3, :3]; t = T[:3, 3]
+                T = transforms[seg_idx]
+                R = T[:3, :3]
+                t = T[:3, 3]
                 all_pts.append((R @ lp.t()).t() + t)
             return torch.cat(all_pts).view(-1)
         jac = tf.vmap(tf.jacrev(get_flat_points_single))(q)
@@ -121,59 +117,8 @@ class ControlPoint:
         all_points = []
         for i, seg_idx in enumerate(self.seg_indices):
             lp = self.local_points[i]
-            T = transforms[:, seg_idx]; R = T[:, :3, :3]; t = T[:, :3, 3].unsqueeze(1)
+            T = transforms[:, seg_idx]
+            R = T[:, :3, :3]
+            t = T[:, :3, 3].unsqueeze(1)
             all_points.append(torch.matmul(R, lp.t()).transpose(1, 2) + t)
         return torch.cat(all_points, dim=1)
-
-
-def load_model(model_path, device, n_dim=7, n_layers=20, n_hidden=256, model_type="sll", n_points_per_link=2):
-    if model_type.lower() == "gndf":
-        from common.models.gndf import G_NDF
-        model = G_NDF(n_layers=n_layers, n_hidden=n_hidden, 
-                      n_points_per_link=n_points_per_link, device=device).to(device)
-    else:
-        model = select_model(model_type, n_dim, n_layers, n_hidden).to(device)
-    
-    checkpoint = torch.load(model_path, map_location=device)
-    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-        state_dict = checkpoint["state_dict"]
-    else:
-        state_dict = checkpoint
-    
-    model_keys = set(model.state_dict().keys())
-    state_dict = {k: v for k, v in state_dict.items() if k in model_keys}
-    
-    model.load_state_dict(state_dict)
-    model.eval()
-    
-    return model
-
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-def transform_points(points, T, device='cuda'):
-    """
-    Transform points by a 4x4 matrix T.
-    points: (N, 3) or (B, N, 3)
-    T: (4, 4) or (B, 4, 4) or (B*K, 4, 4)
-    """
-    # Normalize shapes
-    if points.ndim == 2:
-        points = points.unsqueeze(0)
-    if T.ndim == 2:
-        T = T.unsqueeze(0)
-    
-    B_pts, N, _ = points.shape
-    B_T, _, _ = T.shape
-    
-    if B_pts == 1 and B_T > 1:
-        points = points.expand(B_T, -1, -1)
-    
-    B, N, _ = points.shape
-    ones = torch.ones(B, N, 1, device=device)
-    points_homo = torch.cat([points, ones], dim=2) # (B, N, 4)
-    
-    # points_homo: (B, N, 4), T: (B, 4, 4)
-    # transformed: (B, N, 4)
-    transformed_homo = torch.bmm(points_homo, T.transpose(1, 2))
-    return transformed_homo[:, :, :3]

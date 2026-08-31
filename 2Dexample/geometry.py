@@ -2,7 +2,6 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from common.utils import get_device
 
 class ForwardKinematics(nn.Module):
     def __init__(self, base_position=[5.0, 5.0], link_lengths=[2.1, 2.1], device="cuda"):

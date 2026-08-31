@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""
-RRT + NDF-only global trajectory optimization (no NN-SDF).
-"""
 import os
 import argparse
+import time
+import mujoco
+import mujoco.viewer
 import numpy as np
 import torch
 from rrt import RRT
 from common.utils import get_device
-from trajectory_optim import CasADiPlanner, NLoptPlanner
-from trajectory_verify import TrajectoryEvaluator
+from traj_solver import CasADiPlanner, NLoptPlanner
+from traj_verify import TrajectoryEvaluator
 
 
 def resample_path(path, n_points):
@@ -23,17 +23,32 @@ def resample_path(path, n_points):
     return new_path
 
 
-def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_iter, device):
+def play_trajectory(scene, path, fps):
+    model = mujoco.MjModel.from_xml_path(os.path.abspath(scene))
+    data = mujoco.MjData(model)
+    frame_time = 1.0 / fps
+    with mujoco.viewer.launch_passive(model, data) as viewer:
+        for q in path:
+            if not viewer.is_running():
+                break
+            started = time.perf_counter()
+            data.qpos[:7] = q
+            if model.nq > 7:
+                data.qpos[7:model.nq] = 0.04
+            mujoco.mj_forward(model, data)
+            viewer.sync()
+            time.sleep(max(0.0, frame_time - (time.perf_counter() - started)))
+
+
+def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_iter, device, playback_fps):
     device_str = str(device).split(':')[0]
 
     print("=" * 80)
     print("RRT + NDF TRAJECTORY OPTIMIZATION")
     print("=" * 80)
 
-    # ----- [1] RRT -----
-    print("\n[1] Generating RRT path...")
     rrt_planner = RRT(sence)
-    rrt_path = rrt_planner.plan(output_file=None, timeout=10.0)
+    rrt_path = rrt_planner.plan(timeout=10.0)
 
     if rrt_path is None:
         print("RRT failed!")
@@ -47,12 +62,10 @@ def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_it
     os.makedirs(save_dir, exist_ok=True)
     np.save(f"{save_dir}/rrt.npy", rrt_path)
 
-    # ----- [2] Build NDF planner + evaluator -----
-    ndf_planner = CasADiPlanner(model, sence, device=device_str, model_type="G-NDF")
-    evaluator = TrajectoryEvaluator(sence, model=ndf_planner.model, device=device_str)
-    ndf_nlopt_planner = NLoptPlanner(model, sence, device=device_str, opt_base=ndf_planner)
+    cosdf_planner = CasADiPlanner(model, sence, device=device_str)
+    evaluator = TrajectoryEvaluator(sence)
+    cosdf_nlopt_planner = NLoptPlanner(cosdf_planner, device=device_str)
 
-    # ----- [3] Baselines -----
     results = []
 
     rrt_metrics = evaluator.evaluate(rrt_path)
@@ -75,27 +88,25 @@ def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_it
         "time": 0.0,
     })
 
-    # ----- [4] NDF Optimization -----
-    print(f"\n[2] Running NDF ({solver.upper()})...")
     torch.cuda.empty_cache()
 
     if solver.lower() in ['slsqp', 'cobyla']:
-        ok, path_opt, t, meta = ndf_nlopt_planner.solve(
+        ok, path_opt, t, meta = cosdf_nlopt_planner.solve(
             start, goal,
             initial_path=rrt_resampled,
             solver=solver,
             n_waypoints=n_waypoints,
-            verbose=True,
+            verbose=False,
             safety_margin=safety_margin,
             max_iter=max_iter,
         )
     else:
-        ok, path_opt, t, meta = ndf_planner.solve(
+        ok, path_opt, t, meta = cosdf_planner.solve(
             start, goal,
             initial_path=rrt_resampled,
             solver=solver,
             n_waypoints=n_waypoints,
-            verbose=True,
+            verbose=False,
             safety_margin=safety_margin,
             max_iter=max_iter,
         )
@@ -110,11 +121,9 @@ def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_it
         "time": t,
     })
 
-    ndf_save = f"{save_dir}/ndf.npy"
+    ndf_save = f"{save_dir}/cosdf.npy"
     np.save(ndf_save, path_opt)
-    print(f"  Safe: {ndf_metrics['success']} | Time: {t:.2f}s | Saved to {ndf_save}")
 
-    # ----- [5] Summary -----
     print(f"\n{'=' * 100}")
     print("SUMMARY COMPARISON (GROUND TRUTH METRICS)")
     print(f"{'=' * 100}")
@@ -124,15 +133,17 @@ def global_optimization(sence, model, solver, n_waypoints, safety_margin, max_it
         safe_str = "YES" if res['safe'] else "NO"
         print(f"{res['name']:<20} | {safe_str:<6} | {res['len']:<9.4f} | {res['sm']:<9.2f} | {res['sm95']:<9.2f} | {res['time']:<8.2f}s")
     print(f"{'=' * 100}\n")
+    play_trajectory(sence, resample_path(path_opt, max(len(path_opt), playback_fps * 5)), playback_fps)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--world", type=str, default="obs30", help="Scene name")
-    parser.add_argument("--solver", type=str, choices=['slsqp', 'ipopt'], default="ipopt")
+    parser.add_argument("--world", type=str, default="obs10", help="Scene name")
+    parser.add_argument("--solver", type=str, choices=['slsqp', 'ipopt'], default="slsqp")
     parser.add_argument("--n_waypoints", type=int, default=30)
     parser.add_argument("--safety_margin", type=float, default=0.02)
     parser.add_argument("--max_iter", type=int, default=200)
+    parser.add_argument("--playback_fps", type=int, default=30)
     args = parser.parse_args()
 
     sence = "scenes/" + args.world + ".xml"
@@ -148,4 +159,5 @@ if __name__ == "__main__":
         safety_margin=args.safety_margin,
         max_iter=args.max_iter,
         device=device,
+        playback_fps=max(1, args.playback_fps),
     )

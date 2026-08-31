@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-import argparse
 import numpy as np
 import mujoco
 from ompl import base as ob
 from ompl import geometric as og
 import os
-import sys
 
 def check_franka_collision(mj_model, mj_data, q, is_robot_body):
     mj_data.qpos[:7] = q
@@ -60,17 +58,12 @@ class RRT:
         q = np.array([state[i] for i in range(self.dim)])
         return not check_franka_collision(self.mj_model, self.mj_data, q, self.is_robot_body)
 
-    def is_collision_free(self, q):
-        """Convenience method for numpy arrays."""
-        return not check_franka_collision(self.mj_model, self.mj_data, q, self.is_robot_body)
-
-    def plan(self, start_q=None, goal_q=None, output_file=None, timeout=10.0, n_waypoints=100):
+    def plan(self, start_q=None, goal_q=None, timeout=10.0):
         if start_q is None:
             print("Sampling valid start state...")
             start_state = self.get_valid_random_state()
         else:
-            start_state = start_q # Assume start_q is an OMPL state if it's already one, but our script passes array
-            # If it's a numpy array, convert to OMPL state
+            start_state = start_q
             if isinstance(start_q, (np.ndarray, list)):
                 q_arr = start_q
                 start_state = ob.State(self.space)
@@ -107,9 +100,6 @@ class RRT:
                 for j in range(self.dim):
                     path_np[i, j] = s[j]
             
-            if output_file:
-                np.save(output_file, path_np)
-                print(f"Path saved to {output_file} with {n_states} waypoints.")
             return path_np
         else:
             print("No solution found.")

@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""
-RRT-Connect + NDF-only shelf-to-shelf trajectory optimization (no NN-SDF).
-"""
 import os
+import time
 import mujoco
+import mujoco.viewer
 import argparse
 import numpy as np
 import torch
 from rrt_connect import RRTConnect
-from trajectory_optim import CasADiPlanner, NLoptPlanner
+from traj_solver import CasADiPlanner, NLoptPlanner
 from common.utils import get_device
-from trajectory_verify import TrajectoryEvaluator
+from traj_verify import TrajectoryEvaluator
 
 
-def get_shelf_config(mj_model, mj_data, is_robot_body, target_z, x_range=[0.4, 0.7], y_range=[-0.4, 0.4]):
-    """Sample a valid configuration where the end-effector is on a specific shelf."""
+def get_shelf_config(mj_model, mj_data, is_robot_body, target_z, x_range=(0.4, 0.7), y_range=(-0.4, 0.4)):
     dim = 7
     lower = mj_model.jnt_range[:7, 0]
     upper = mj_model.jnt_range[:7, 1]
@@ -23,7 +21,6 @@ def get_shelf_config(mj_model, mj_data, is_robot_body, target_z, x_range=[0.4, 0
     if target_z > 0.9:
         x_range = [max(0.6, x_range[0] - 0.05), x_range[1]]
 
-    print(f"Sampling configuration for shelf at z={target_z} (x={x_range}, y={y_range})...")
     for i in range(100000):
         q = lower + np.random.rand(dim) * (upper - lower)
         mj_data.qpos[:7] = q
@@ -43,7 +40,6 @@ def get_shelf_config(mj_model, mj_data, is_robot_body, target_z, x_range=[0.4, 0
                     collision = True
                     break
             if not collision:
-                print(f"  Found valid config at iteration {i}: EE pos {ee_pos}")
                 return q
 
     raise RuntimeError(f"Failed to find valid configuration for shelf at z={target_z}")
@@ -61,14 +57,41 @@ def resample_path(path, n_points):
     return new_path
 
 
-def shelf_ndf(scene, model_path, start_layer, goal_layer, solver, n_waypoints, safety_margin, max_iter):
+def play_trajectory(scene, path, fps):
+    model = mujoco.MjModel.from_xml_path(os.path.abspath(scene))
+    data = mujoco.MjData(model)
+    frame_time = 1.0 / fps
+    with mujoco.viewer.launch_passive(model, data) as viewer:
+        for q in path:
+            if not viewer.is_running():
+                break
+            started = time.perf_counter()
+            data.qpos[:7] = q
+            if model.nq > 7:
+                data.qpos[7:model.nq] = 0.04
+            mujoco.mj_forward(model, data)
+            viewer.sync()
+            time.sleep(max(0.0, frame_time - (time.perf_counter() - started)))
+
+
+def shelf_optimization(
+    scene,
+    model_path,
+    world,
+    start_layer,
+    goal_layer,
+    solver,
+    n_waypoints,
+    safety_margin,
+    max_iter,
+    playback_fps,
+):
     scene = os.path.abspath(scene)
     model_path = os.path.abspath(model_path)
 
     mj_model = mujoco.MjModel.from_xml_path(scene)
     mj_data = mujoco.MjData(mj_model)
 
-    # Build robot body ID set
     robot_body_ids = set()
     base_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "base")
     for i in range(mj_model.nbody):
@@ -88,13 +111,6 @@ def shelf_ndf(scene, model_path, start_layer, goal_layer, solver, n_waypoints, s
     device = get_device()
     device_str = str(device).split(':')[0]
 
-    print("=" * 80)
-    print(f"RRT-CONNECT + NDF SHELF OPTIMIZATION")
-    print(f"Move: Layer {start_layer} -> Layer {goal_layer}")
-    print("=" * 80)
-
-    # ----- [1] Sample configs & RRT -----
-    print("\n[1] Sampling shelf configurations and generating RRT path...")
     start_q = get_shelf_config(mj_model, mj_data, is_robot_body, z_start, x_range=[0.65, 0.8])
     goal_q = get_shelf_config(mj_model, mj_data, is_robot_body, z_goal, x_range=[0.65, 0.8])
 
@@ -109,25 +125,23 @@ def shelf_ndf(scene, model_path, start_layer, goal_layer, solver, n_waypoints, s
     goal_q = rrt_path[-1]
     rrt_resampled = resample_path(rrt_path, n_waypoints)
 
-    save_dir = "output/traj/" + args.world
+    save_dir = "output/traj/" + world
     os.makedirs(save_dir, exist_ok=True)
     np.save(f"{save_dir}/rrt.npy", rrt_path)
 
-    # ----- [2] Build NDF planner + evaluator -----
-    gndf_planner = CasADiPlanner(model_path, scene, device=device_str, model_type="G-NDF")
-    gndf_nlopt = NLoptPlanner(model_path, scene, device=device_str, opt_base=gndf_planner)
-    evaluator = TrajectoryEvaluator(scene, model=gndf_planner.model, device=device_str)
+    cosdf_planner = CasADiPlanner(model_path, scene, device=device_str)
+    cosdf_nlopt = NLoptPlanner(cosdf_planner, device=device_str)
+    evaluator = TrajectoryEvaluator(scene)
 
-    # ----- [3] Baselines -----
     results = []
 
     rrt_m = evaluator.evaluate(rrt_path)
     results.append({
-        "name": "RRT (raw)",
+        "name": "RRT (initial)",
         "safe": rrt_m['success'],
         "len": rrt_m['path_length'],
         "sm": rrt_m['smoothness'],
-        "sm95": rrt_m.get('smoothness_p95', 0.0),
+        "sm95": rrt_m['smoothness_p95'],
         "time": 0.0,
     })
 
@@ -137,21 +151,19 @@ def shelf_ndf(scene, model_path, start_layer, goal_layer, solver, n_waypoints, s
         "safe": res_m['success'],
         "len": res_m['path_length'],
         "sm": res_m['smoothness'],
-        "sm95": res_m.get('smoothness_p95', 0.0),
+        "sm95": res_m['smoothness_p95'],
         "time": 0.0,
     })
 
-    # ----- [4] NDF Optimization -----
-    print(f"\n[2] Running NDF ({solver.upper()})...")
     torch.cuda.empty_cache()
 
     if solver.lower() in ['slsqp', 'cobyla']:
-        ok, path_opt, t, _ = gndf_nlopt.solve(
+        _, path_opt, t, _ = cosdf_nlopt.solve(
             start_q, goal_q, initial_path=rrt_resampled, solver=solver,
-            n_waypoints=n_waypoints, verbose=True, safety_margin=safety_margin, max_iter=max_iter,
+            n_waypoints=n_waypoints, verbose=False, safety_margin=safety_margin, max_iter=max_iter,
         )
     else:
-        ok, path_opt, t, _ = gndf_planner.solve(
+        _, path_opt, t, _ = cosdf_planner.solve(
             start_q, goal_q, initial_path=rrt_resampled,
             solver=solver, n_waypoints=n_waypoints, verbose=False,
             safety_margin=safety_margin, max_iter=max_iter,
@@ -163,28 +175,23 @@ def shelf_ndf(scene, model_path, start_layer, goal_layer, solver, n_waypoints, s
         "safe": metrics['success'],
         "len": metrics['path_length'],
         "sm": metrics['smoothness'],
-        "sm95": metrics.get('smoothness_p95', 0.0),
+        "sm95": metrics['smoothness_p95'],
         "time": t,
     })
 
-    ndf_save = f"{save_dir}/ndf.npy"
+    ndf_save = f"{save_dir}/cosdf.npy"
     np.save(ndf_save, path_opt)
-    safe_str = "YES" if metrics['success'] else "NO"
-    print(f"  => Safe: {safe_str} | Length: {metrics['path_length']:.4f} | "
-          f"Sm: {metrics['smoothness']:.2f} | Sm_p95: {metrics.get('smoothness_p95', 0.0):.2f} | Time: {t:.2f}s")
 
-    # ----- [5] Summary -----
-    print(f"\n{'=' * 110}")
+    print(f"\n{'=' * 100}")
     print("SUMMARY COMPARISON (GROUND TRUTH METRICS)")
-    print(f"{'=' * 110}")
+    print(f"{'=' * 100}")
     print(f"{'Method':<20} | {'Safe':<6} | {'Length':<9} | {'Sm_mean':<9} | {'Sm_p95':<9} | {'Time':<8}")
-    print(f"{'-' * 110}")
+    print(f"{'-' * 100}")
     for res in results:
         s = "YES" if res['safe'] else "NO"
         print(f"{res['name']:<20} | {s:<6} | {res['len']:<9.4f} | {res['sm']:<9.2f} | {res['sm95']:<9.2f} | {res['time']:<8.2f}s")
-    print(f"{'=' * 110}\n")
-
-    print(f"Trajectories saved to {save_dir}/")
+    print(f"{'=' * 100}\n")
+    play_trajectory(scene, resample_path(path_opt, max(len(path_opt), playback_fps * 5)), playback_fps)
 
 
 if __name__ == "__main__":
@@ -193,9 +200,10 @@ if __name__ == "__main__":
     parser.add_argument("--start", type=int, default=None, help="Start layer (1-3)")
     parser.add_argument("--goal", type=int, default=None, help="Goal layer (1-3)")
     parser.add_argument("--solver", type=str, choices=['slsqp', 'ipopt'], default="ipopt")
-    parser.add_argument("--n_waypoints", type=int, default=64)
+    parser.add_argument("--n_waypoints", type=int, default=30)
     parser.add_argument("--safety_margin", type=float, default=0.02)
-    parser.add_argument("--max_iter", type=int, default=150)
+    parser.add_argument("--max_iter", type=int, default=200)
+    parser.add_argument("--playback_fps", type=int, default=30)
     args = parser.parse_args()
 
     scene = "scenes/" + args.world + ".xml"
@@ -210,23 +218,25 @@ if __name__ == "__main__":
         print(f"Randomly selected start layer: {start}")
 
     if goal is None:
-        remaining = [l for l in layers if l != start]
+        remaining = [layer for layer in layers if layer != start]
         goal = np.random.choice(remaining)
         print(f"Randomly selected goal layer: {goal}")
 
     if start == goal:
         print(f"Error: Start and goal layers must be different (both are {start}).")
-        remaining = [l for l in layers if l != start]
+        remaining = [layer for layer in layers if layer != start]
         goal = np.random.choice(remaining)
         print(f"Adjusted goal layer to: {goal}")
 
-    shelf_ndf(
+    shelf_optimization(
         scene=scene,
         model_path=model,
+        world=args.world,
         start_layer=start,
         goal_layer=goal,
         solver=args.solver,
         n_waypoints=args.n_waypoints,
         safety_margin=args.safety_margin,
         max_iter=args.max_iter,
+        playback_fps=max(1, args.playback_fps),
     )

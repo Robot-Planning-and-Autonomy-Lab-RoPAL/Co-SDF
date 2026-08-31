@@ -5,7 +5,6 @@ import argparse
 import robot_tools
 import numpy as np
 import torch
-import matplotlib.pyplot as plt
 from pathlib import Path
 from tqdm import tqdm
 from multiprocessing import Pool
@@ -56,13 +55,7 @@ def sample_boundary_uniform(edges, n_pts):
 		samples.append(p1 + t * (p2 - p1))
 	return np.array(samples)
 
-def generate_gndf_dataset(n_pts, bounds, world_file, near_ratio=0.5, sigma=0.01, 
-                         c_space=None, theta=None, n_points_per_link=2):
-	"""
-	Consolidated Sampling and Augmentation.
-	1) Boundary & AABB Sampling (q space)
-	2) Compute Link xyz features (Workspace space) and concatenate with q
-	"""
+def generate_cosdf_dataset(n_pts, bounds, world_file, near_ratio=0.5, sigma=0.01, c_space=None, theta=None, n_points_per_link=2):
 	dim = len(bounds)
 	lo = np.array([b[0] for b in bounds], dtype=float)
 	hi = np.array([b[1] for b in bounds], dtype=float)
@@ -99,21 +92,20 @@ def generate_gndf_dataset(n_pts, bounds, world_file, near_ratio=0.5, sigma=0.01,
 		
 		n_aabb_needed = max(0, n_pts - len(X_boundary))
 		X_aabb = lo + np.random.rand(n_aabb_needed, dim) * span
-		L_aabb = _parallel_label(X_aabb, "AABB Points")
-		X_in_aabb, X_out_aabb = X_aabb[L_aabb == -1], X_aabb[L_aabb == 1]
 		
 		X_all = np.vstack([X_boundary, X_aabb])
 		L_all = _parallel_label(X_all, "Final Labelling")
 		X_in, X_out = X_all[L_all == -1], X_all[L_all == 1]
 		
-		# Log counts
 		print(f"Sampled: {len(X_in)} in collision, {len(X_out)} free.")
 
 	device = "cuda" if torch.cuda.is_available() else "cpu"
-	cp_manager = ControlPoint(base_position=[_GLOBAL_PROBLEM.robot._base_position.x, _GLOBAL_PROBLEM.robot._base_position.y], 
-                              link_lengths=_GLOBAL_PROBLEM.robot._link_lengths.tolist(), 
-                              n_points_per_link=n_points_per_link,
-                              device=device)
+	cp_manager = ControlPoint(base_position=[_GLOBAL_PROBLEM.robot._base_position.x,
+										  _GLOBAL_PROBLEM.robot._base_position.y],
+										  link_lengths=_GLOBAL_PROBLEM.robot._link_lengths.tolist(),
+										  n_points_per_link=n_points_per_link,
+										  device=device
+										  )
 
 	def augment(q_np):
 		if len(q_np) == 0: return np.zeros((0, n_points_per_link*2*2))
@@ -123,42 +115,18 @@ def generate_gndf_dataset(n_pts, bounds, world_file, near_ratio=0.5, sigma=0.01,
 			pts_flat = pts.reshape(q_np.shape[0], -1)
 		return pts_flat.cpu().numpy()
 
-	X_train_in_gndf = augment(X_in)
-	X_train_out_gndf = augment(X_out)
+	X_train_in_cosdf = augment(X_in)
+	X_train_out_cosdf = augment(X_out)
 	
-	return X_train_in_gndf, X_train_out_gndf, X_in, X_out
-
-
-def plot_cspace(theta, c_space, outdir, prefix):
-	"""Save a quick visualization of the configuration space grid."""
-	t1, t2 = theta
-	plt.figure(figsize=(6, 6))
-	im = plt.imshow(
-		c_space.T,
-		extent=[t1[0], t1[-1], t2[0], t2[-1]],
-		origin='lower',
-		aspect='auto',
-		cmap='RdBu_r'
-	)
-	plt.colorbar(im, fraction=0.046, pad=0.04)
-	plt.xlabel(r"$\theta_1$")
-	plt.ylabel(r"$\theta_2$")
-	plt.title("C-space occupancy")
-	plt.tight_layout()
-	os.makedirs(outdir, exist_ok=True)
-	out_path = os.path.join(outdir, f"{prefix}_cspace.png")
-	plt.savefig(out_path, dpi=200)
-	plt.close()
-	print(f"Saved c-space visualization to {out_path}")
+	return X_train_in_cosdf, X_train_out_cosdf, X_in, X_out
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--world", default='block_world1', help="path to the world file")
-	parser.add_argument("--n-train", type=int, default=2000, help="number of training samples to generate")
+	parser.add_argument("--n-train", type=int, default=5000, help="number of training samples to generate")
 	parser.add_argument("--near-ratio", type=float, default=0.6, help="ratio of near-boundary samples")
 	parser.add_argument("--sigma", type=float, default=0.01, help="stddev for boundary sampling noise")
 	parser.add_argument("--n-points-per-link", type=int, default=1, help="control points per link for workspace augmentation")
-	parser.add_argument("--visu", action="store_true",  default=True, help="generate visualization of sampled configurations")
 	args = parser.parse_args()
 	
 	sence = "config/" + args.world + ".yaml" 
@@ -172,40 +140,20 @@ if __name__ == "__main__":
 	bounds = [(theta[0][0], theta[0][-1]), (theta[1][0], theta[1][-1])]
 	
 	t0 = time.time()
-	X_in, X_out, Q_in, Q_out = generate_gndf_dataset(
-		args.n_train, bounds, sence, args.near_ratio, args.sigma, 
-		c_space, theta, args.n_points_per_link
+	X_in, X_out, Q_in, Q_out = generate_cosdf_dataset(args.n_train,
+												  bounds,
+												  sence,
+												  args.near_ratio,
+												  args.sigma,
+												  c_space,
+												  theta,
+												  args.n_points_per_link
 	)
 
 	np.save(os.path.join(outdir, f"{prefix}_Xtrain_in.npy"), X_in)
 	np.save(os.path.join(outdir, f"{prefix}_Xtrain_out.npy"), X_out)
 	np.save(os.path.join(outdir, f"{prefix}_Qtrain_in.npy"), Q_in)
 	np.save(os.path.join(outdir, f"{prefix}_Qtrain_out.npy"), Q_out)
-	print(f"DONE. Saved G-NDF data to {outdir} in {time.time()-t0:.2f}s")
+	print(f"DONE. Saved COSDF data to {outdir} in {time.time()-t0:.2f}s")
 	print(f"Xtrain Shape: {X_in.shape}")
 	print(f"Xtrain Shape: {X_out.shape}")
-
-	if args.visu:
-
-		plt.figure(figsize=(6,5))
-		plt.imshow(c_space.T, origin="lower",
-					extent=[theta[0][0], theta[0][-1], theta[1][0], theta[1][-1]],
-					cmap="gray_r")
-		if len(X_in):  
-			plt.scatter(Q_in[:,0],  Q_in[:,1],  c='red',  s=5, label="Collision")
-		if len(X_out): 
-			plt.scatter(Q_out[:,0], Q_out[:,1], c='blue', s=5, label="Free")
-		
-		out_path = os.path.join(outdir, f"{prefix}_cspace_{args.n_train}_samples.png")
-		plt.xlabel(r"$\theta_1$")
-		plt.ylabel(r"$\theta_2$")
-		plt.title("Configuration Space with Sampled Points")
-		plt.legend(loc='lower right', frameon=True, framealpha=0.9)
-
-		pi = np.pi
-		plt.xticks([0, pi/2, pi, 3*pi/2, 2*pi], [r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$'])
-		plt.yticks([0, pi/2, pi, 3*pi/2, 2*pi], [r'$0$', r'$\pi/2$', r'$\pi$', r'$3\pi/2$', r'$2\pi$'])
-
-		plt.savefig(out_path, dpi=300, bbox_inches='tight')
-		plt.close()
-		print(f"Figure saved to {out_path}")

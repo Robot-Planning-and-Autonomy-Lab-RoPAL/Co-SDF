@@ -61,7 +61,7 @@ class RRT:
         solved = self.ss.solve(timeout)
         plan_time = time.time() - t0
         
-        if solved:
+        if solved and self.ss.haveExactSolutionPath():
             path = self.ss.getSolutionPath()
             path.interpolate() 
             
@@ -73,6 +73,9 @@ class RRT:
             
             print(f"RRT: Found path with {len(res)} states in {plan_time:.4f}s.")
             return res
+        elif solved:
+            print(f"RRT: Only found an approximate path in {plan_time:.4f}s; rejecting it.")
+            return None
         else:
             print(f"RRT: Failed to find a path (Time: {plan_time:.4f}s).")
             return None
