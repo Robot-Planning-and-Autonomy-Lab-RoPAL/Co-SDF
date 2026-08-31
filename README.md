@@ -1,4 +1,5 @@
 **# Co-SDF: Learning Signed-Distance-Correlated Neural Fields in Configuration Space Without Distance Supervision**
+
 **Accepted at IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS 2026)**
 
 We propose Co-SDF, a correlated signed distance neural representation defined directly in C-space. 
