@@ -2,6 +2,7 @@
 import os
 from types import SimpleNamespace
 import argparse
+import warnings
 import numpy as np
 
 import torch
@@ -14,21 +15,28 @@ from common.utils import get_device
 from common.callback import CheckpointCB, LoggerCB, Render2DCB, UpdateHkrRegulCB
 
 if __name__ == "__main__":
-    
-    parser = argparse.ArgumentParser(prog="Training of a 1-Lipschitz architecture")
-    parser.add_argument("--world", type=str, default="block_world1", help="name of the world")
-    parser.add_argument("--n-hidden", type=int, default=256, help="size of the layers")
-    parser.add_argument("--n-layers", type=int, default=10, help="number of layers in the network")
-    parser.add_argument("--model", type=str, default="cosdf", help="which model to train (SLL or COSDF)")
-    parser.add_argument("--epochs", type=int, default=200, help="Number of training epochs")
-    parser.add_argument("--batch-size", type=int, default=200, help="Train batch size")
-    parser.add_argument("--learning-rate", type=float, default=5e-4, help="Adam's learning rate")
-    parser.add_argument("--loss-margin", type=float, default=1e-2, help="margin m in the hKR loss")
-    parser.add_argument("--loss-lambda", type=float, default=100.0, help="lambda in the hKR loss")
-    parser.add_argument("--eikonal-weight", type=float, default=0.1, help="Weight of Eikonal loss (gradient norm ≈ 1 on θ)")
-    parser.add_argument("--eikonal-normalize-scale", type=str, default="auto", help="Scale factor to normalize gradient norm (default 'auto' extracts from model)")
-    parser.add_argument("--checkpoint-freq", type=int, default=10, help="Number of epochs between each model save")
-    
+
+    parser = argparse.ArgumentParser(prog="Training of a Co-SDF")
+    parser.add_argument("--world", type=str, default="block_world1")
+    parser.add_argument("--n-hidden", type=int, default=256)
+    parser.add_argument("--n-layers", type=int, default=10)
+    parser.add_argument("--model", type=str, default="cosdf")
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--batch-size", type=int, default=200)
+    parser.add_argument("--learning-rate", type=float, default=5e-4)
+    parser.add_argument("--loss-margin", type=float, default=1e-2)
+    parser.add_argument("--loss-lambda", type=float, default=100.0)
+    parser.add_argument("--eikonal-weight", type=float, default=0.1)
+    parser.add_argument("--eikonal-normalize-scale", type=str, default="auto")
+    parser.add_argument("--checkpoint-freq", type=int, default=10)
+
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Attempting to run cuBLAS, but there was no current CUDA context! Attempting to set the primary context\.\.\.",
+        category=UserWarning,
+        module=r"torch\.autograd\.graph",
+    )
+
     args = parser.parse_args()
     
     data = f"inputs/{args.world}"
@@ -115,7 +123,9 @@ if __name__ == "__main__":
     
     if args.model.lower() == "cosdf":
         plot_domain = ([0.0, 0.0], [2*np.pi, 2*np.pi])
-        callbacks.append(Render2DCB(config.output_folder, config.checkpoint_freq, plot_domain, res=500))
+        callbacks.append(Render2DCB(
+            config.output_folder, config.checkpoint_freq, plot_domain, res=500,
+        ))
     
     callbacks.append(UpdateHkrRegulCB({1 : 1., 5 : 10., 10: 100., 30: config.loss_regul}))
     

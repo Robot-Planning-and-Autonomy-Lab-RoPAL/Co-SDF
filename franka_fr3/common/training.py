@@ -5,19 +5,20 @@ from tqdm import tqdm
 from .loss import EikonalLoss, LossHKR
 from .callback import Callback
 
-import mouette as M
 import time
 
-class Trainer(M.Logger):
+class Trainer:
 
     def __init__(self, train_loaders, test_loader, config):
-        super().__init__("Training")
         self.config = config
         self.train_loaders = train_loaders
         self.test_loader = test_loader
         self.optimizer = None
         self.callbacks = []
         self.metrics = dict()
+
+    def log(self, *args):
+        print("[Training]", *args)
     
     def get_optimizer(self, model):
         return torch.optim.Adam(model.parameters(), lr=self.config.learning_rate)

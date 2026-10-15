@@ -3,6 +3,7 @@
 import os
 from types import SimpleNamespace
 import argparse
+import warnings
 import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader
@@ -14,22 +15,30 @@ from common.callback import LoggerCB, CheckpointCB, UpdateHkrRegulCB
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(prog="Training of a 1-Lipschitz architecture")
-    parser.add_argument("--world", type=str, default="bookshelf", help="sence name")
-    parser.add_argument("--n-layers", type=int, default=20, help="number of layers in the network")
-    parser.add_argument("--n-hidden", type=int, default=512, help="size of the layers")
-    parser.add_argument("--epochs", type=int, default=200, help="Number of training epochs")
-    parser.add_argument("--batch-size", type=int, default=2048, help="Train batch size")
-    parser.add_argument("--test-batch-size", type = int, default = 5000, help="Test batch size")
-    parser.add_argument("--learning-rate", type=float, default=5e-4, help="Adam's learning rate")
-    parser.add_argument("--loss-margin", type=float, default=1e-2, help="margin m in the hKR loss")
-    parser.add_argument("--loss-lambda", type=float, default=100., help="lambda in the hKR loss")
-    parser.add_argument("--eikonal-weight", type=float, default=0.1, help="Weight for Eikonal regularization")
-    parser.add_argument("--eikonal-target", type=float, default=1.0, help="Target gradient norm for Eikonal loss")
-    parser.add_argument("--eikonal-normalize-scale", type=str, default="auto", help="Scale factor to normalize gradient norm (default 'auto' extracts from model)")
-    parser.add_argument("--checkpoint-freq", type=int, default=10, help="Number of epochs between each model save")
-    parser.add_argument("--resume", type=str, default=None, help="path to a COSDF checkpoint")
 
+    parser = argparse.ArgumentParser(prog="Training of a 1-Lipschitz architecture")
+    parser.add_argument("--world", type=str, default="bookshelf")
+    parser.add_argument("--n-layers", type=int, default=20)
+    parser.add_argument("--n-hidden", type=int, default=512)
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--batch-size", type=int, default=200)
+    parser.add_argument("--test-batch-size", type = int, default = 5000)
+    parser.add_argument("--learning-rate", type=float, default=5e-4)
+    parser.add_argument("--loss-margin", type=float, default=1e-2)
+    parser.add_argument("--loss-lambda", type=float, default=100.)
+    parser.add_argument("--eikonal-weight", type=float, default=0.1)
+    parser.add_argument("--eikonal-target", type=float, default=1.0)
+    parser.add_argument("--eikonal-normalize-scale", type=str, default="auto")
+    parser.add_argument("--checkpoint-freq", type=int, default=10)
+    parser.add_argument("--resume", type=str, default=None)
+
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Attempting to run cuBLAS, but there was no current CUDA context! Attempting to set the primary context\.\.\.",
+        category=UserWarning,
+        module=r"torch\.autograd\.graph",
+    )
+    
     args = parser.parse_args()
 
     dataset_prefix = "fr3"

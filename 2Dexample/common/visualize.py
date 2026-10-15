@@ -4,7 +4,7 @@ import matplotlib.colors as colors
 
 from .utils import forward_in_batches
 
-def render_sdf_2d(render_path, contour_path, gradient_path, model, domain,
+def render_sdf_2d(render_path, model, domain,
                   device, res=1000, batch_size=1000):
     domain_min = np.asarray(domain[0])
     domain_max = np.asarray(domain[1])
@@ -16,12 +16,7 @@ def render_sdf_2d(render_path, contour_path, gradient_path, model, domain,
     Y = np.linspace(domain_min[1], domain_max[1], resY)
     
     pts = np.hstack((np.meshgrid(X, Y))).swapaxes(0, 1).reshape(2, -1).T
-    if gradient_path is not None:
-        dist_values, grad_values = forward_in_batches(
-            model, pts, device,
-            compute_grad=True, batch_size=batch_size)
-    else:
-        dist_values = forward_in_batches(model, pts, device, compute_grad=False, batch_size=batch_size)
+    dist_values = forward_in_batches(model, pts, device, compute_grad=False, batch_size=batch_size)
         
     img = np.concatenate(dist_values).reshape((res, resY)).T
     img = img[::1, :]
@@ -56,43 +51,4 @@ def render_sdf_2d(render_path, contour_path, gradient_path, model, domain,
         plt.ylabel(r"$\theta_2$")
         plt.colorbar(pos)
         plt.savefig(render_path, bbox_inches='tight', pad_inches=0)
-        plt.close()
-        
-    if contour_path is not None:
-        plt.clf()
-        norm = colors.TwoSlopeNorm(vmin=vmin, vmax=vmax, vcenter=0)
-        plt.imshow(img, cmap="bwr", norm=norm, origin='lower', extent=extent)
-        ax = plt.gca()
-        ax.set_aspect("equal", adjustable="box")
-        
-        _apply_pi_ticks(ax)
-            
-        plt.xlabel(r"$\theta_1$")
-        plt.ylabel(r"$\theta_2$")
-        
-        XX, YY = np.meshgrid(X, Y)
-        plt.contour(XX, YY, img, levels=16, colors='k', linestyles="solid", linewidths=0.3)
-        plt.contour(XX, YY, img, levels=[0.], colors='k', linestyles="solid", linewidths=0.6)
-        plt.savefig(contour_path, bbox_inches='tight', pad_inches=0, dpi=200)
-        plt.close()
-        
-    if gradient_path is not None:
-        grad_norms = np.linalg.norm(grad_values, axis=1)
-        grad_img = grad_norms.reshape((res, resY)).T
-        grad_img = grad_img[::-1, :]
-        print("GRAD NORM INTERVAL", (np.min(grad_img), np.max(grad_img)))
-        
-        plt.clf()
-        pos = plt.imshow(grad_img, vmin=0.5, vmax=1.5, cmap="bwr", origin='lower', extent=extent)
-        ax = plt.gca()
-        ax.set_aspect("equal", adjustable="box")
-        
-        _apply_pi_ticks(ax)
-            
-        XX, YY = np.meshgrid(X, Y)
-        plt.contour(XX, YY, img, levels=[0.], colors='k', linestyles="solid", linewidths=0.6)
-        plt.xlabel("x")
-        plt.ylabel("y")
-        plt.colorbar(pos)
-        plt.savefig(gradient_path, bbox_inches='tight', pad_inches=0)
         plt.close()

@@ -24,7 +24,7 @@ pip install -r requirements.txt
 - `2Dexample/`: 2-DoF data generation, training, evaluation, and trajectory planning.
 - `franka_fr3/`: 7-DoF Franka FR3 data generation, training, evaluation, and trajectory planning.
 - `data_generator.py`: generates collision-labelled configurations.
-- `train_lip.py`: trains the 1-Lipschitz Co-SDF model.
+- `train.py`: trains the Co-SDF model.
 - `correlation.py`: evaluates field correlation and collision classification.
 - `escape.py`: evaluates optimization-based and sampling-based collision escape.
 - `traj_planner.py`: runs RRT initialization and Co-SDF trajectory optimization.
@@ -38,7 +38,7 @@ pip install -r requirements.txt
 ```bash
 cd 2Dexample
 python data_generator.py --world block_world1 --n-train 5000
-python train_lip.py --world block_world1 --model cosdf --n-layers 10 --n-hidden 256 --epochs 200 --batch-size 200 --learning-rate 5e-4 --loss-margin 1e-2 --loss-lambda 100 --eikonal-weight 0.1
+python train.py --world block_world1 --n-layers 10 --n-hidden 256 --epochs 200 --batch-size 200 --learning-rate 5e-4 --loss-margin 1e-2 --loss-lambda 100 --eikonal-weight 0.1
 ```
 
 **## 7-DoF**
@@ -46,7 +46,7 @@ python train_lip.py --world block_world1 --model cosdf --n-layers 10 --n-hidden 
 ```bash
 cd franka_fr3
 python data_generator.py --world obs10 --n_points 500000
-python train_lip.py --world obs10 --n-layers 20 --n-hidden 512 --epochs 200 --batch-size 2048 --learning-rate 5e-4 --loss-margin 1e-2 --loss-lambda 100 --eikonal-weight 0.1 --eikonal-target 1.0
+python train.py --world obs10 --n-layers 20 --n-hidden 512 --epochs 200 --batch-size 200 --learning-rate 5e-4 --loss-margin 1e-2 --loss-lambda 100 --eikonal-weight 0.1 --eikonal-target 1.0
 ```
 
 ### Training parameters
@@ -147,3 +147,14 @@ python shelf_planner.py --world bookshelf --solver ipopt --n_waypoints 30 --safe
 | ![RRT Path](rrt.gif) | ![Optimized Path](ndf.gif) |
 | ![RRT Path](rrt_far.gif) | ![Optimized Path](ndf_far.gif) |
 | ![RRT Path](rrt_front.gif) | ![Optimized Path](ndf_front.gif) |
+
+## Citation
+
+```bibtex
+@inproceedings{zheng2026cosdf,
+    title={Co-SDF: Learning Signed-Distance-Correlated Neural Fields in Configuration Space Without Distance Supervision},
+    author={Zheng, Qisong and Li, Sihui},
+    booktitle={IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS)},
+    year={2026}
+}
+```

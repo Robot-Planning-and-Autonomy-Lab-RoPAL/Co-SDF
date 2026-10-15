@@ -66,28 +66,22 @@ class CheckpointCB(Callback):
 
 class Render2DCB(Callback):
 
-    def __init__(self, save_folder, freq, plot_domain, res=800, output_contours=True, output_gradient_norm=True, batch_size=5000):
+    def __init__(self, save_folder, freq, plot_domain, res=800, batch_size=5000):
         super().__init__()
         self.save_folder = save_folder
         self.freq = freq
         self.domain = plot_domain
         self.freq = freq
         self.res = res
-        self.output_contours = output_contours
-        self.output_gradient_norm = output_gradient_norm
         self.batch_size = batch_size
 
     def callOnEndTrain(self, trainer, model):
         epoch = trainer.metrics["epoch"]
         if self.freq>0 and epoch%self.freq==0:
             render_path = os.path.join(self.save_folder, f"render_{epoch}.png")
-            contour_path = os.path.join(self.save_folder, f"contour_{epoch}.png") if self.output_contours else None
-            gradient_path = os.path.join(self.save_folder, f"grad_{epoch}.png") if self.output_gradient_norm else None
             try:
                 render_sdf_2d(
                     render_path,
-                    contour_path,
-                    gradient_path,
                     model, 
                     self.domain, 
                     trainer.config.device, 
