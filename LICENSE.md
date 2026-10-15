@@ -26,6 +26,8 @@ SOFTWARE.
 
 ## ETHZ ASL
 
+Source: [amr_visualisations — original license](https://github.com/ethz-asl/amr_visualisations/blob/master/LICENSE.md).
+
 MIT License
 
 Copyright (c) 2020 ETHZ ASL
@@ -49,6 +51,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ## Guillaume Coiffier
+
+Source: [1-Lipschitz Neural Distance Fields — original license](https://github.com/GCoiffier/1-Lipschitz-Neural-Distance-Fields/blob/main/LICENSE).
 
 MIT License
 
