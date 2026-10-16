@@ -24,6 +24,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+Third-Party Licenses
+
+This project includes code from the following projects, each under its own license.
+
 ## ETHZ ASL
 
 Source: [amr_visualisations — original license](https://github.com/ethz-asl/amr_visualisations/blob/master/LICENSE.md).
