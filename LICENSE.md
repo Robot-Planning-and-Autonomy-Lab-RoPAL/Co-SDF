@@ -4,7 +4,7 @@
 
 MIT License
 
-Copyright (c) 2026 Co-SDF contributors
+Copyright (c) 2026 Qisong Zheng <qisong.zheng@wsu.edu>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
