@@ -2,7 +2,7 @@
 
 **Accepted at IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS 2026)**
 
-[Project Website](https://robot-planning-and-autonomy-lab-ropal.github.io/Co-SDF-Project-Page/) · [Paper (PDF)](https://wpcdn.web.wsu.edu/wp-labs/uploads/sites/3527/2026/08/Zheng2026cosdf.pdf)
+[Website](https://robot-planning-and-autonomy-lab-ropal.github.io/Co-SDF-Project-Page/) · [Paper](https://wpcdn.web.wsu.edu/wp-labs/uploads/sites/3527/2026/08/Zheng2026cosdf.pdf)
 
 We propose Co-SDF, a correlated signed distance neural representation defined directly in C-space. 
 The model learns a continuous scalar field over joint configurations from binary collision labels without requiring explicit supervision of true C-space signed distance-to-collision. 
